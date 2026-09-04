@@ -318,8 +318,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# API endpoint
-API_URL = "http://127.0.0.1:8000"
+import os
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 
 # Initialize session state
 if 'analyze_result' not in st.session_state:
