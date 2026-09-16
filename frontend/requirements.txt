@@ -1,0 +1,6 @@
+streamlit
+streamlit-option-menu
+requests
+pandas
+plotly
+websockets
