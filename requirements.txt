@@ -1,4 +1,4 @@
-# Core Framework
+# Core Backend
 fastapi
 uvicorn[standard]
 python-multipart
@@ -6,84 +6,26 @@ python-multipart
 # Frontend & UI
 streamlit
 streamlit-option-menu
-altair
 plotly
 
-# Data Processing
+# Data
 pandas
 numpy
-scipy
-
-# HTTP & API
 requests
-httpx
-
-# Data Validation
 pydantic
-pydantic[email]
-
-# Database (SQLite is built-in, but these are useful utilities)
-sqlite-utils
-
-# Visualization (additional)
-matplotlib
-seaborn
-kaleido
-
-# Export & Reporting
-openpyxl
-xlsxwriter
-reportlab
-
-# Utilities
-python-dotenv
-python-dateutil
-pytz
-colorama
-
-# Optional but recommended for better performance
-orjson
-ujson
-
-# Development & Debugging
-black
-isort
-flake8
-pytest
-pytest-cov
-
-# AI & ML (optional - for advanced features)
-scikit-learn
-joblib
-
-# Authentication & Security (optional)
-python-jose[cryptography]
-passlib[bcrypt]
-
-# Web Scraping & Additional Features (optional)
-beautifulsoup4
-lxml
-
-# Monitoring & Logging
-loguru
-
-# Performance & Caching
-redis
-cachetools
-
-# Email Notifications (optional)
 email-validator
 
-# File Handling
-pillow
+# Auth & Security
+bcrypt
+python-jose[cryptography]
+slowapi
 
-# Testing
-pytest-asyncio
-pytest-httpx
+# OTP
+pyotp
 
-# Code Quality
-pre-commit
+# PDF Reports
+fpdf2
 
-# Documentation
-mkdocs
-mkdocs-material
+# Config
+python-dotenv
+openpyxl

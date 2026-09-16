@@ -1,33 +1,60 @@
-# Byte-compiled / optimized / DLL files
+﻿# ============================================================
+# Byte-compiled / Python
+# ============================================================
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 *.pyd
-*.dll
-*.exe
 
+# ============================================================
 # Virtual Environment
+# ============================================================
 venv/
 env/
 ENV/
-env.bak/
-venv.bak/
-pythonenv*
 .venv/
 .virtualenv/
+pythonenv*/
 
+# ============================================================
 # Database
+# ============================================================
 *.db
 *.sqlite
 *.sqlite3
 student_marks.db
 student_marks_backup_*.db
 *.db-journal
-*.sql
 *.sqlite-journal
 
-# IDE
+# ============================================================
+# Environment / Secrets — CRITICAL
+# ============================================================
+# Ignore ALL .env files (contain secrets)
+.env
+.env.local
+.env.*.local
+*.env
+.env.production
+.env.development
+
+# NEVER ignore the template (no secrets, safe to commit)
+!.env.example
+
+# Keys / certs
+*.key
+*.pem
+*.crt
+*.p12
+secrets.py
+credentials.json
+service-account.json
+*.secret
+
+# ============================================================
+# IDE / Editor
+# ============================================================
 .vscode/
 .idea/
 *.swp
@@ -38,284 +65,134 @@ student_marks_backup_*.db
 .project
 .pydevproject
 .settings/
-*.sublime-project
-*.sublime-workspace
-.vim/
-.vimrc
 
+# ============================================================
 # Streamlit
-.streamlit/
+# ============================================================
 .streamlit/secrets.toml
 .streamlit/config.toml
 
-# Python cache
-*.pyc
-*.pyo
-*.pyd
+# ============================================================
+# Testing / Coverage
+# ============================================================
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 .tox/
 .mypy_cache/
 .dmypy.json
 dmypy.json
 .hypothesis/
-.pytest_cache/
 
+# ============================================================
 # Logs
+# ============================================================
 *.log
-log/
 logs/
-*.log.*
-error_logs/
-access_logs/
+log/
 
+# ============================================================
 # OS files
+# ============================================================
 Thumbs.db
 Desktop.ini
 .history/
 *.tmp
 *.temp
 $RECYCLE.BIN/
-*.DS_Store
-.AppleDouble
-.LSOverride
-._*
 
-# Environment variables
-.env
-.env.local
-.env.*.local
-*.env
-.env.example
-.env.production
-.env.development
-*.key
-*.pem
-*.crt
-*.p12
-
-# Jupyter Notebooks
+# ============================================================
+# Jupyter
+# ============================================================
 .ipynb_checkpoints/
-*.ipynb
 *.ipynb_checkpoints/
 
-# Uploads/Downloads
+# ============================================================
+# Runtime folders
+# ============================================================
 uploads/
-downloads/
-media/
-static/
-files/
 temp/
-data/
+reports/
 output/
-input/
+export/
 
+# User data files (but allow templates)
+data/*.csv
+data/*.xlsx
+data/*.pdf
+
+# Allow template/sample files
+!templates/
+!samples/
+!*.template.*
+
+# ============================================================
 # Docker
-.docker/
+# ============================================================
 docker-compose.override.yml
-*.dockerignore
-Dockerfile.*
 .dockerignore
 
+# ============================================================
 # Backup files
+# ============================================================
 *.bak
 *.backup
 *.old
 *.orig
 *.rej
-*.tmp
-*.temp
 
-# Coverage reports
-*.cover
-.coverage
-coverage.xml
-*.py,cover
-.hypothesis/
-.tox/
-
-# Profiling data
-*.prof
-*.pstats
-*.gcda
-*.gcno
-
+# ============================================================
 # Packaging
+# ============================================================
 *.egg-info/
 *.egg
 .eggs/
 dist/
 build/
 develop-eggs/
-downloads/
-eggs/
-parts/
-bin/
-var/
 sdist/
 wheel/
 *.whl
-*.wheel
 .pip-eggs/
 
-# Testing
-.pytest_cache/
-.tox/
-.coverage
-coverage.xml
-htmlcov/
-test-results/
-tests/__pycache__/
-
-# Misc
-*.pid
-*.seed
-*.pid.lock
+# ============================================================
+# Model files (if using ML later)
+# ============================================================
+*.h5
+*.hdf5
+*.onnx
+*.joblib
 *.pkl
-*.pickle
-*.npy
-*.npz
-*.json
-*.yaml
-*.yml
-*.xml
-*.html
-*.css
-*.js
-*.map
+*.sav
 
-# Windows
+# ============================================================
+# Windows / Mac / Linux
+# ============================================================
 *.exe
 *.dll
 *.msi
-*.log
 *.cab
-*.msm
-*.msp
-*.nupkg
-
-# Mac
-*.DS_Store
 .AppleDouble
 .LSOverride
 ._*
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db
 
-# Linux
-*.swp
-*.swo
-*~
-.old
-.nfs*
-
+# ============================================================
 # Node (if any)
+# ============================================================
 node_modules/
 npm-debug.log
 yarn-debug.log
 yarn-error.log
-package-lock.json
-yarn.lock
 
-# TypeScript (if any)
-*.tsbuildinfo
-*.tscache
-*.js.map
-
-# Specific to your project
-*.xlsx
-*.xls
-*.csv
-*.pdf
-*.doc
-*.docx
-*.ppt
-*.pptx
-
-# API Keys and Secrets
-secrets.py
-config.py
-credentials.json
-service-account.json
-*.secret
-*.secrets
-
-# Data files
-*.arrow
-*.feather
-*.parquet
-*.orc
-*.avro
-
-# Model files
-*.h5
-*.hdf5
-*.pb
-*.tflite
-*.onnx
-*.joblib
-*.pkl
-*.sav
-
-# Reports
-reports/
-output/
-export/
-
-# System
-*.sys
-*.bin
-*.dat
-*.pid
-*.port
-
-# Coverage
-.coverage
-htmlcov/
-.coverage.*
-*.cover
-*.py,cover
-.noseids
-
-# Sphinx documentation
-docs/_build/
-docs/_static/
-docs/_templates/
-
-# PyBuilder
-target/
-
-# pyenv
+# ============================================================
+# Python tools
+# ============================================================
 .python-version
-
-# pipenv
 Pipfile.lock
-
-# poetry
 poetry.lock
-
-# flake8
-.flakes
-
-# mypy
-.mypy_cache
-
-# pyre
 .pyre/
-
-# pytype
 .pytype/
-
-# Cython
-*.so
-*.c
-*.cpp
-*.h
-
-# Profiling
-*.prof
-*.pstats
-*.lprof
