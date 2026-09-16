@@ -1,5 +1,5 @@
 """
-Student Marks Analyzer — Complete Backend (Phase 1-4)
+Student Marks Analyzer â€” Complete Backend (Phase 1-4)
 Includes all features: auth, ML, notifications, themes, bulk import, PostgreSQL-ready.
 """
 from fastapi import FastAPI, HTTPException, Query, Depends, UploadFile, File, Request, BackgroundTasks, WebSocket, WebSocketDisconnect
@@ -112,6 +112,28 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
 
 # ============================================================
+# SECURITY CONFIG (Phase 5)
+# ============================================================
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:8501").split(",")
+CORS_ORIGINS = [o.strip() for o in CORS_ORIGINS if o.strip()]
+
+SESSION_IDLE_MINUTES = {
+    "admin": int(os.getenv("SESSION_IDLE_ADMIN", "15")),
+    "teacher": int(os.getenv("SESSION_IDLE_TEACHER", "30")),
+    "student": int(os.getenv("SESSION_IDLE_STUDENT", "60")),
+    "parent": int(os.getenv("SESSION_IDLE_PARENT", "60")),
+}
+
+# Cloudflare Turnstile (free CAPTCHA alternative)
+TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "").strip()
+TURNSTILE_ENABLED = bool(TURNSTILE_SECRET_KEY)
+
+# Password policy
+PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "10"))
+PASSWORD_HISTORY_CHECK = int(os.getenv("PASSWORD_HISTORY_CHECK", "3"))
+
+
+# ============================================================
 # FEATURE 7: PostgreSQL Support (env-based)
 # ============================================================
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
@@ -142,7 +164,7 @@ os.makedirs(os.path.join(os.path.dirname(__file__), "models"), exist_ok=True)
 # ============================================================
 app = FastAPI(
     title="Student Marks Analyzer API",
-    description="Complete API — Phases 1-4 with ML, themes, preferences",
+    description="Complete API â€” Phases 1-4 with ML, themes, preferences",
     version="12.0.0",
 )
 
@@ -152,11 +174,14 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
+    expose_headers=["Content-Disposition"],
+    max_age=3600,
 )
+print(f"[OK] CORS locked to: {CORS_ORIGINS}")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
@@ -165,8 +190,8 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 # VALIDATION
 # ============================================================
 def validate_password_strength(password: str) -> tuple:
-    if len(password) < 8:
-        return False, "Password must be at least 8 characters"
+    if len(password) < PASSWORD_MIN_LENGTH:
+        return False, f"Password must be at least {PASSWORD_MIN_LENGTH} characters"
     if not re.search(r"[A-Z]", password):
         return False, "Must contain an uppercase letter"
     if not re.search(r"[a-z]", password):
@@ -175,7 +200,48 @@ def validate_password_strength(password: str) -> tuple:
         return False, "Must contain a digit"
     if not re.search(r"[!@#$%^&*(),.?\":{}|<>_\-+=\[\]\\\/;'`~]", password):
         return False, "Must contain a special character"
+    weak = ["password", "admin", "12345", "qwerty", "letmein", "welcome"]
+    if any(w in password.lower() for w in weak):
+        return False, "Password contains a common weak pattern"
     return True, ""
+
+
+def is_password_reused(user_id: int, new_password: str) -> bool:
+    """Check last N password hashes."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                SELECT password_hash FROM password_history
+                WHERE user_id=? ORDER BY created_at DESC LIMIT ?
+            """), (user_id, PASSWORD_HISTORY_CHECK))
+            for row in cursor.fetchall():
+                if verify_password(new_password, row["password_hash"]):
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def store_password_history(user_id: int, password_hash: str):
+    """Store password hash in history (keep last N+5)."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                INSERT INTO password_history (user_id, password_hash)
+                VALUES (?, ?)
+            """), (user_id, password_hash))
+            cursor.execute(_q("""
+                DELETE FROM password_history
+                WHERE id NOT IN (
+                    SELECT id FROM password_history
+                    WHERE user_id=? ORDER BY created_at DESC LIMIT ?
+                )
+            """), (user_id, PASSWORD_HISTORY_CHECK + 5))
+            conn.commit()
+    except Exception:
+        pass
 
 
 def validate_subject_name(name: str) -> tuple:
@@ -250,6 +316,105 @@ def decode_token(token: str, refresh: bool = False) -> Optional[dict]:
         return jwt.decode(token, key, algorithms=[ALGORITHM])
     except JWTError:
         return None
+
+# ============================================================
+# SECURITY HELPERS (Phase 5)
+# ============================================================
+def log_security_event(user_id, username, event_type, details=None,
+                       ip=None, ua=None, severity="info"):
+    """Log a security event."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                INSERT INTO security_events
+                (user_id, username, event_type, details, ip_address, user_agent, severity)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """), (user_id, username, event_type, details,
+                   ip, (ua or "")[:200], severity))
+            conn.commit()
+    except Exception as e:
+        print(f"[SECURITY LOG] {event_type}: {e}")
+
+
+def register_session(user_id, token, ip, ua):
+    """Track active session."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                INSERT INTO sessions (user_id, token_hash, device_info, ip_address)
+                VALUES (?, ?, ?, ?)
+            """), (user_id, hash_token(token), (ua or "")[:200], ip))
+            conn.commit()
+    except Exception as e:
+        print(f"[SESSION] {e}")
+
+
+def revoke_all_sessions(user_id):
+    """Mark all sessions revoked."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                UPDATE sessions SET revoked=1 WHERE user_id=?
+            """), (user_id,))
+            conn.commit()
+    except Exception:
+        pass
+
+
+def is_session_valid(user_id, token):
+    """Check if session is still valid."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                SELECT revoked FROM sessions
+                WHERE user_id=? AND token_hash=?
+                ORDER BY id DESC LIMIT 1
+            """), (user_id, hash_token(token)))
+            row = cursor.fetchone()
+            if row and row["revoked"]:
+                return False
+    except Exception:
+        pass
+    return True
+
+
+def increment_token_version(user_id):
+    """Bump token version (invalidates all tokens)."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                UPDATE users SET token_version = COALESCE(token_version, 1) + 1
+                WHERE id=?
+            """), (user_id,))
+            conn.commit()
+    except Exception:
+        pass
+
+
+def verify_turnstile(token: str, ip: str = None) -> bool:
+    """Verify Cloudflare Turnstile CAPTCHA token (no-op if disabled)."""
+    if not TURNSTILE_ENABLED:
+        return True
+    if not token:
+        return False
+    try:
+        import requests as req
+        r = req.post(
+            "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+            data={"secret": TURNSTILE_SECRET_KEY, "response": token, "remoteip": ip},
+            timeout=10,
+        )
+        return r.json().get("success", False)
+    except Exception as e:
+        print(f"[TURNSTILE] {e}")
+        return False
+
+
 
 
 # ============================================================
@@ -430,7 +595,7 @@ def init_database():
                     """, ("admin2", "admin2@example.com", backup_hash, "Backup Admin", "admin"))
                     conn.commit()
                     print("[OK] Default admins created")
-                print("[OK] PostgreSQL mode — schema verified")
+                print("[OK] PostgreSQL mode â€” schema verified")
         except Exception as e:
             print(f"[WARN] PostgreSQL init check failed: {e}")
         return
@@ -1258,19 +1423,19 @@ def detect_anomalies(marks):
 def generate_recommendations(marks, avg):
     recs = []
     if avg < 40:
-        recs += ["🚨 Urgent: Consider additional tutoring", "📚 Focus on foundational concepts"]
+        recs += ["ðŸš¨ Urgent: Consider additional tutoring", "ðŸ“š Focus on foundational concepts"]
     elif avg < 60:
-        recs += ["📈 Need improvement: Study groups recommended", "📅 Create structured schedule"]
+        recs += ["ðŸ“ˆ Need improvement: Study groups recommended", "ðŸ“… Create structured schedule"]
     elif avg < 75:
-        recs += ["💡 Good performance: Focus on weak areas", "🎯 Set higher targets"]
+        recs += ["ðŸ’¡ Good performance: Focus on weak areas", "ðŸŽ¯ Set higher targets"]
     else:
-        recs += ["🌟 Excellent! Help peers", "🏆 Aim for top performance"]
+        recs += ["ðŸŒŸ Excellent! Help peers", "ðŸ† Aim for top performance"]
     weak = [i for i, m in enumerate(marks) if m < 40]
     if weak:
-        recs.append(f"⚠️ Focus on subjects {', '.join(str(i+1) for i in weak)}")
+        recs.append(f"âš ï¸ Focus on subjects {', '.join(str(i+1) for i in weak)}")
     strong = [i for i, m in enumerate(marks) if m >= 80]
     if strong:
-        recs.append(f"✅ Strong in subjects {', '.join(str(i+1) for i in strong)}")
+        recs.append(f"âœ… Strong in subjects {', '.join(str(i+1) for i in strong)}")
     return recs
 
 
@@ -1374,7 +1539,19 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         cursor = conn.cursor()
         cursor.execute(_q("SELECT * FROM users WHERE username=? AND is_active=1"), (username,))
         row = cursor.fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        user = dict(row)
+
+        token_version = payload.get("token_version", 1)
+        user_version = user.get("token_version", 1) or 1
+        if token_version != user_version:
+            return None
+
+        if not is_session_valid(user["id"], token):
+            return None
+
+    return user
 
 
 async def require_user(user=Depends(get_current_user)):
@@ -1744,11 +1921,19 @@ def login(request: Request, username: str = "", password: str = "",
     })
     refresh = create_refresh_token({"sub": user["username"], "user_id": user["id"]})
 
+    # Register session for tracking
+    register_session(user["id"], access_token, ip, ua)
+
+    # Log security event
+    log_security_event(user["id"], user["username"], "login_success",
+                      None, ip, ua, "info")
+
     return {
         "access_token": access_token,
         "refresh_token": refresh,
         "token_type": "bearer",
         "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "must_change_password": bool(user.get("must_change_password", 0)),
         "user": {
             "id": user["id"],
             "username": user["username"],
@@ -1761,6 +1946,7 @@ def login(request: Request, username: str = "", password: str = "",
             "email_verified": bool(user.get("email_verified")),
             "phone_verified": bool(user.get("phone_verified")),
             "twofa_enabled": bool(user.get("twofa_enabled")),
+            "must_change_password": bool(user.get("must_change_password", 0)),
         },
     }
 
@@ -1848,18 +2034,58 @@ def get_me(user=Depends(require_user)):
 
 
 @app.post("/auth/change-password")
-def change_password(data: PasswordChange, user=Depends(require_user)):
+def change_password(data: PasswordChange, request: Request, user=Depends(require_user)):
+    ip = request.client.host if request.client else "unknown"
+
     if not verify_password(data.old_password, user["hashed_password"]):
+        log_security_event(user["id"], user["username"], "password_change_failed",
+                          "wrong_old_password", ip, None, "warning")
         raise HTTPException(400, "Current password is incorrect")
+
     is_valid, error = validate_password_strength(data.new_password)
     if not is_valid:
         raise HTTPException(400, error)
+
+    if is_password_reused(user["id"], data.new_password):
+        raise HTTPException(400,
+            f"Cannot reuse your last {PASSWORD_HISTORY_CHECK} passwords")
+
     new_hash = get_password_hash(data.new_password)
+
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(_q("UPDATE users SET hashed_password=? WHERE id=?"), (new_hash, user["id"]))
+
+        # Store current hash in history
+        cursor.execute(_q("""
+            INSERT INTO password_history (user_id, password_hash)
+            VALUES (?, ?)
+        """), (user["id"], user["hashed_password"]))
+
+        # Update password + flag + timestamp + bump version
+        cursor.execute(_q("""
+            UPDATE users SET
+                hashed_password=?,
+                must_change_password=0,
+                password_changed_at=?,
+                token_version=COALESCE(token_version, 1) + 1
+            WHERE id=?
+        """), (new_hash, datetime.utcnow().isoformat(), user["id"]))
+
         conn.commit()
-    return {"message": "Password changed successfully"}
+
+    # Revoke all existing sessions
+    revoke_all_sessions(user["id"])
+
+    log_security_event(user["id"], user["username"], "password_changed",
+                      None, ip, None, "info")
+    log_audit(user["id"], user["username"], "change_password", "user",
+             None, ip)
+
+    return {
+        "message": "Password changed successfully. Please log in again.",
+        "reauthentication_required": True,
+    }
+
 
 
 @app.post("/auth/logout")
@@ -1888,6 +2114,164 @@ def check_strength(password: str = Query(..., min_length=1)):
 
 
 # FEATURE 1: Theme update
+
+
+# ============================================================
+# SECURITY MANAGEMENT (Phase 5)
+# ============================================================
+@app.get("/auth/sessions")
+def list_sessions(request: Request, user=Depends(require_user)):
+    """List active sessions for current user."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                SELECT id, device_info, ip_address, created_at, last_active, revoked
+                FROM sessions
+                WHERE user_id=? AND revoked=0
+                ORDER BY last_active DESC
+            """), (user["id"],))
+            rows = [dict(r) for r in cursor.fetchall()]
+            for r in rows:
+                if r.get("created_at"):
+                    r["created_at"] = str(r["created_at"])[:19]
+                if r.get("last_active"):
+                    r["last_active"] = str(r["last_active"])[:19]
+            return {"sessions": rows, "count": len(rows)}
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+@app.delete("/auth/sessions/{session_id}")
+def revoke_session(session_id: int, user=Depends(require_user)):
+    """Revoke a specific session."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(_q("""
+            UPDATE sessions SET revoked=1 WHERE id=? AND user_id=?
+        """), (session_id, user["id"]))
+        conn.commit()
+    log_security_event(user["id"], user["username"], "session_revoked",
+                      f"session_id={session_id}")
+    return {"message": "Session revoked"}
+
+
+@app.post("/auth/sessions/revoke-all")
+def revoke_all_my_sessions(request: Request, user=Depends(require_user)):
+    """Revoke ALL sessions (forces re-login everywhere)."""
+    revoke_all_sessions(user["id"])
+    increment_token_version(user["id"])
+    ip = request.client.host if request.client else None
+    log_security_event(user["id"], user["username"], "all_sessions_revoked",
+                      None, ip, None, "warning")
+    return {"message": "All sessions revoked. Re-login required.",
+            "reauthentication_required": True}
+
+
+@app.get("/auth/security-events")
+def get_security_events(request: Request, limit: int = 50,
+                        user=Depends(require_user)):
+    """Get security events for current user (or all if admin)."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if user["role"] == "admin":
+            cursor.execute(_q("""
+                SELECT * FROM security_events
+                ORDER BY created_at DESC LIMIT ?
+            """), (limit,))
+        else:
+            cursor.execute(_q("""
+                SELECT * FROM security_events
+                WHERE user_id=?
+                ORDER BY created_at DESC LIMIT ?
+            """), (user["id"], limit))
+        rows = [dict(r) for r in cursor.fetchall()]
+        for r in rows:
+            if r.get("created_at"):
+                r["created_at"] = str(r["created_at"])[:19]
+        return {"events": rows, "count": len(rows)}
+
+
+@app.post("/auth/2fa/recovery-codes/generate")
+def generate_recovery_codes(request: Request, user=Depends(require_user)):
+    """Generate 10 one-time recovery codes."""
+    if not user.get("twofa_enabled"):
+        raise HTTPException(400, "Enable 2FA first")
+
+    codes = []
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(_q("""
+            DELETE FROM recovery_codes WHERE user_id=? AND used=0
+        """), (user["id"],))
+        for _ in range(10):
+            code = f"{secrets.token_hex(2).upper()}-{secrets.token_hex(2).upper()}-{secrets.token_hex(2).upper()}"
+            codes.append(code)
+            cursor.execute(_q("""
+                INSERT INTO recovery_codes (user_id, code_hash)
+                VALUES (?, ?)
+            """), (user["id"], hash_token(code)))
+        conn.commit()
+
+    log_security_event(user["id"], user["username"], "recovery_codes_generated",
+                      "10 codes", request.client.host if request.client else None)
+    return {"codes": codes, "message": "Save these codes!"}
+
+
+@app.post("/auth/2fa/recovery-codes/verify")
+def verify_recovery_code(data: TOTPVerify, request: Request):
+    """Use a recovery code (bypasses 2FA)."""
+    code = data.code.strip().upper()
+    code_hash = hash_token(code)
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(_q("""
+            SELECT id, user_id FROM recovery_codes
+            WHERE code_hash=? AND used=0
+        """), (code_hash,))
+        row = cursor.fetchone()
+
+        if not row:
+            log_security_event(None, None, "recovery_code_invalid",
+                              None, request.client.host if request.client else None,
+                              severity="warning")
+            raise HTTPException(401, "Invalid or already-used recovery code")
+
+        cursor.execute(_q("""
+            UPDATE recovery_codes SET used=1, used_at=? WHERE id=?
+        """), (datetime.utcnow().isoformat(), row["id"]))
+        conn.commit()
+
+        cursor.execute(_q("SELECT * FROM users WHERE id=?"), (row["user_id"],))
+        u = cursor.fetchone()
+        if not u:
+            raise HTTPException(404, "User not found")
+        u = dict(u)
+
+    token_version = u.get("token_version", 1) or 1
+    access_token = create_access_token({
+        "sub": u["username"], "role": u["role"],
+        "user_id": u["id"], "token_version": token_version,
+    })
+    refresh = create_refresh_token({"sub": u["username"], "user_id": u["id"]})
+
+    log_security_event(u["id"], u["username"], "recovery_code_used",
+                      None, request.client.host if request.client else None,
+                      severity="warning")
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh,
+        "token_type": "bearer",
+        "user": {
+            "id": u["id"], "username": u["username"], "email": u["email"],
+            "role": u["role"], "language": u.get("language", "en"),
+            "theme": u.get("theme", "light"),
+        },
+    }
+
+
 @app.put("/auth/theme")
 def update_theme(data: ThemeUpdate, user=Depends(require_user)):
     if data.theme not in ["light", "dark"]:
