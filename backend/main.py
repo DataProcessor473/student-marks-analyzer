@@ -1258,19 +1258,19 @@ def detect_anomalies(marks):
 def generate_recommendations(marks, avg):
     recs = []
     if avg < 40:
-        recs += ["Urgent: Consider additional tutoring", "Focus on foundational concepts"]
+        recs += ["🚨 Urgent: Consider additional tutoring", "📚 Focus on foundational concepts"]
     elif avg < 60:
-        recs += ["Need improvement: Study groups recommended", "Create structured schedule"]
+        recs += ["📈 Need improvement: Study groups recommended", "📅 Create structured schedule"]
     elif avg < 75:
-        recs += ["Good performance: Focus on weak areas", "Set higher targets"]
+        recs += ["💡 Good performance: Focus on weak areas", "🎯 Set higher targets"]
     else:
-        recs += ["Excellent! Help peers", "Aim for top performance"]
+        recs += ["🌟 Excellent! Help peers", "🏆 Aim for top performance"]
     weak = [i for i, m in enumerate(marks) if m < 40]
     if weak:
-        recs.append(f"Focus on subjects {', '.join(str(i+1) for i in weak)}")
+        recs.append(f"⚠️ Focus on subjects {', '.join(str(i+1) for i in weak)}")
     strong = [i for i, m in enumerate(marks) if m >= 80]
     if strong:
-        recs.append(f"Strong in subjects {', '.join(str(i+1) for i in strong)}")
+        recs.append(f"✅ Strong in subjects {', '.join(str(i+1) for i in strong)}")
     return recs
 
 
@@ -3701,6 +3701,77 @@ def process_queue_manual(admin=Depends(require_admin)):
         row = cursor.fetchone()
         pending = row["c"] if isinstance(row, dict) else row[0]
     return {"message": "Queue processed", "pending": pending}
+
+# ============================================================
+# LIVE FEED (Real-time events with polling)
+# ============================================================
+@app.get("/live/events")
+def get_live_events(
+    since_id: int = 0,
+    limit: int = 50,
+    user=Depends(require_user),
+):
+    """Fetch recent live events for the current user (and broadcasts)."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                SELECT id, user_id, event_type, payload, created_at
+                FROM live_events
+                WHERE id > ? AND (user_id = ? OR user_id IS NULL)
+                ORDER BY id DESC
+                LIMIT ?
+            """), (since_id, user["id"], limit))
+            events = []
+            for r in cursor.fetchall():
+                e = dict(r)
+                try:
+                    e["payload"] = json.loads(e["payload"]) if e["payload"] else {}
+                except Exception:
+                    e["payload"] = {}
+                events.append(e)
+            return {"count": len(events), "events": events}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to load events: {str(e)}")
+
+
+@app.get("/live/stats")
+def live_stats(user=Depends(require_user)):
+    """Summary of live event types."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                SELECT event_type, COUNT(*) as count
+                FROM live_events
+                WHERE user_id = ? OR user_id IS NULL
+                GROUP BY event_type
+                ORDER BY count DESC
+            """), (user["id"],))
+            rows = cursor.fetchall()
+            cursor.execute(_q("""
+                SELECT COUNT(*) as total FROM live_events
+                WHERE user_id = ? OR user_id IS NULL
+            """), (user["id"],))
+            total_row = cursor.fetchone()
+            total = total_row["total"] if isinstance(total_row, dict) else total_row[0]
+            return {
+                "total": total,
+                "by_type": {r["event_type"]: r["count"] for r in rows},
+            }
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {str(e)}")
+
+
+@app.get("/live/test-broadcast")
+def live_test_broadcast(user=Depends(require_admin)):
+    """Admin-only: broadcast a test event to all users."""
+    log_live_event(None, "broadcast_test", {
+        "message": "Broadcast test from admin",
+        "from": user["username"],
+        "timestamp": datetime.now().isoformat(),
+    })
+    return {"message": "Broadcast event logged"}
 
 
 # ============================================================

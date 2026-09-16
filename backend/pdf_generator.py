@@ -161,8 +161,17 @@ def generate_report_card(student: dict, output_path: str):
         pdf.set_font('Helvetica', '', 10)
         for rec in recs[:6]:
             clean = rec.encode('latin-1', 'ignore').decode('latin-1').replace('*', '').strip()
+            # Remove emoji and non-ASCII
+            clean = clean.encode('ascii', 'ignore').decode('ascii').strip()
             if clean:
-                pdf.multi_cell(0, 6, f"- {clean}")
+                pdf.set_x(pdf.l_margin)
+                try:
+                    pdf.multi_cell(0, 6, f"- {clean}")
+                except Exception:
+                    # Truncate if still failing
+                    short = clean[:80]
+                    pdf.set_x(pdf.l_margin)
+                    pdf.multi_cell(0, 6, f"- {short}...")
         pdf.ln(3)
 
     # Signatures
