@@ -22,21 +22,9 @@ st.set_page_config(
 # PWA support
 st.markdown("""
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
-    <meta name="theme-color" content="#667eea">
+    <meta name="theme-color" content="#4f46e5">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
-    <style>
-    @media (max-width: 768px) {
-        .main-header { padding: 1.5rem 1rem !important; }
-        .main-header h1 { font-size: 1.5rem !important; }
-        .metric-card { padding: 1rem !important; }
-        .metric-card .metric-value { font-size: 1.3rem !important; }
-        .block-container { padding: 1rem 0.5rem !important; }
-    }
-    @media (hover: none) {
-        .stButton > button { min-height: 44px; }
-    }
-    </style>
 """, unsafe_allow_html=True)
 
 # Feature: API URL from Streamlit secrets (for cloud) or env (for local)
@@ -157,100 +145,659 @@ for k, v in defaults.items():
 
 
 def apply_theme():
-    if st.session_state.theme == "dark":
-        st.markdown("""
-        <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        * { font-family: 'Inter', sans-serif; }
-        .stApp { background-color: #0e1117; }
-        .main-header {
-            background: linear-gradient(135deg, #1e3a5f 0%, #2d1b4e 100%);
-            padding: 2.5rem 2rem; border-radius: 20px; color: white;
-            margin-bottom: 2rem; box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+    """Apply theme CSS. Scoped, specific selectors only - no global wildcards."""
+    import plotly.io as pio
+    is_dark = st.session_state.get("theme", "light") == "dark"
+    pio.templates.default = "plotly_dark" if is_dark else "plotly_white"
+
+    # ---------- Theme palette ----------
+    if is_dark:
+        V = {
+            "page_bg": "#0f1117",
+            "surface": "#1a1d29",
+            "surface_2": "#232736",
+            "input_bg": "#1e2230",
+            "border": "#2a2f42",
+            "border_soft": "#20243a",
+            "text": "#e8eaf2",
+            "text_muted": "#9aa0b4",
+            "text_dim": "#6c7288",
+            "primary": "#6366f1",
+            "primary_hover": "#818cf8",
+            "primary_soft": "rgba(99,102,241,0.14)",
+            "accent": "#8b5cf6",
+            "success": "#10b981",
+            "warning": "#f59e0b",
+            "danger": "#ef4444",
+            "sidebar_bg": "#12141d",
+            "sidebar_border": "#20243a",
+            "sidebar_text": "#c9cdda",
+            "sidebar_text_dim": "#7d8399",
+            "sidebar_hover": "rgba(99,102,241,0.12)",
+            "sidebar_selected_bg": "rgba(99,102,241,0.18)",
+            "header_bg": "linear-gradient(135deg, #1e2230 0%, #232736 100%)",
+            "shadow": "0 4px 20px rgba(0,0,0,0.35)",
+            "shadow_soft": "0 1px 3px rgba(0,0,0,0.25)",
         }
-        .main-header h1 { font-size: 2.3rem; font-weight: 700; margin: 0; color: white; }
-        .main-header p { margin: 0.5rem 0 0 0; opacity: 0.9; color: white; }
-        .metric-card {
-            background: #1e1e1e; border: 1px solid #2d2d2d;
-            padding: 1.5rem; border-radius: 16px; color: #fafafa;
-        }
-        .metric-card .metric-value { color: #fafafa; font-size: 2rem; font-weight: 700; }
-        .metric-card .metric-label { color: #a0a0a0; font-size: 0.9rem; }
-        .metric-card .metric-icon { font-size: 2rem; margin-bottom: 0.5rem; }
-        .recommendation-card {
-            background: #1e1e1e; border-left: 4px solid #667eea;
-            padding: 1rem 1.5rem; border-radius: 12px;
-            margin: 0.5rem 0; color: #fafafa;
-        }
-        .info-banner {
-            background: rgba(102, 126, 234, 0.15);
-            border-left: 4px solid #667eea;
-            padding: 1rem 1.5rem; border-radius: 10px;
-            margin: 1rem 0;
-        }
-        section[data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
-        }
-        section[data-testid="stSidebar"] * { color: #fafafa !important; }
-        p, h1, h2, h3, h4, h5, h6, span, div, label, li { color: #fafafa !important; }
-        .stTextInput input, .stNumberInput input, .stTextArea textarea {
-            background-color: #1e1e1e !important; color: #fafafa !important;
-            border-color: #333 !important;
-        }
-        .stSelectbox > div > div {
-            background-color: #1e1e1e !important; color: #fafafa !important;
-        }
-        .password-strength-bar { height: 8px; border-radius: 4px; margin: 0.5rem 0; }
-        .role-badge {
-            display: inline-block; padding: 0.3rem 0.8rem;
-            border-radius: 20px; font-size: 0.75rem;
-            font-weight: 600; text-transform: uppercase;
-        }
-        </style>
-        """, unsafe_allow_html=True)
     else:
-        st.markdown("""
-        <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        * { font-family: 'Inter', sans-serif; }
-        .main-header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 2.5rem 2rem; border-radius: 20px; color: white;
-            margin-bottom: 2rem; box-shadow: 0 10px 30px rgba(102,126,234,0.3);
+        V = {
+            "page_bg": "#f8fafc",
+            "surface": "#ffffff",
+            "surface_2": "#f1f5f9",
+            "input_bg": "#ffffff",
+            "border": "#e2e8f0",
+            "border_soft": "#eef2f7",
+            "text": "#0f172a",
+            "text_muted": "#64748b",
+            "text_dim": "#94a3b8",
+            "primary": "#4f46e5",
+            "primary_hover": "#6366f1",
+            "primary_soft": "rgba(79,70,229,0.08)",
+            "accent": "#7c3aed",
+            "success": "#059669",
+            "warning": "#d97706",
+            "danger": "#dc2626",
+            "sidebar_bg": "#ffffff",
+            "sidebar_border": "#e2e8f0",
+            "sidebar_text": "#334155",
+            "sidebar_text_dim": "#94a3b8",
+            "sidebar_hover": "rgba(79,70,229,0.06)",
+            "sidebar_selected_bg": "rgba(79,70,229,0.10)",
+            "header_bg": "linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)",
+            "shadow": "0 4px 20px rgba(15,23,42,0.06)",
+            "shadow_soft": "0 1px 3px rgba(15,23,42,0.05)",
         }
-        .main-header h1 { font-size: 2.3rem; font-weight: 700; margin: 0; color: white; }
-        .main-header p { margin: 0.5rem 0 0 0; opacity: 0.9; color: white; }
-        .metric-card {
-            background: white; padding: 1.5rem; border-radius: 16px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-            border: 1px solid rgba(0,0,0,0.03);
-        }
-        .metric-card .metric-value { font-size: 2rem; font-weight: 700; color: #1a1a2e; }
-        .metric-card .metric-label { font-size: 0.9rem; color: #6b7280; font-weight: 500; }
-        .metric-card .metric-icon { font-size: 2rem; margin-bottom: 0.5rem; }
-        .recommendation-card {
-            background: #f9fafb; padding: 1rem 1.5rem; border-radius: 12px;
-            border-left: 4px solid #667eea; margin: 0.5rem 0;
-        }
-        .stButton > button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; border: none; border-radius: 10px;
-            font-weight: 500; padding: 0.5rem 1rem;
-        }
-        .password-strength-bar { height: 8px; border-radius: 4px; margin: 0.5rem 0; }
-        .role-badge {
-            display: inline-block; padding: 0.3rem 0.8rem;
-            border-radius: 20px; font-size: 0.75rem;
-            font-weight: 600; text-transform: uppercase;
-        }
-        .info-banner {
-            background: #eff6ff;
-            border-left: 4px solid #667eea;
-            padding: 1rem 1.5rem; border-radius: 10px;
-            margin: 1rem 0;
-        }
-        </style>
-        """, unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <style>
+    /* ============ FONTS ============ */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+    html, body {{
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }}
+
+    /* ============ APP BACKGROUND ============ */
+    .stApp {{
+        background-color: {V["page_bg"]};
+        color: {V["text"]};
+    }}
+    .main .block-container {{
+        padding-top: 1.5rem !important;
+        padding-bottom: 2rem !important;
+        max-width: 1400px;
+    }}
+    [data-testid="stHeader"] {{
+        background-color: transparent;
+    }}
+    [data-testid="stToolbar"] {{
+        right: 1rem;
+    }}
+
+    /* ============ TYPOGRAPHY ============ */
+    h1, h2, h3, h4, h5, h6 {{
+        color: {V["text"]};
+        font-weight: 700;
+        letter-spacing: -0.02em;
+    }}
+    h1 {{ font-size: 1.9rem; }}
+    h2 {{ font-size: 1.5rem; }}
+    h3 {{ font-size: 1.2rem; }}
+    p, span, label, li {{
+        color: {V["text"]};
+    }}
+    .stMarkdown p {{
+        color: {V["text"]};
+    }}
+    small {{
+        color: {V["text_muted"]};
+    }}
+    a, a:visited {{
+        color: {V["primary"]};
+        text-decoration: none;
+    }}
+    a:hover {{
+        color: {V["primary_hover"]};
+        text-decoration: underline;
+    }}
+
+    /* ============ HEADER ============ */
+    .main-header {{
+        background: {V["surface"]};
+        border: 1px solid {V["border"]};
+        padding: 1.75rem 2rem;
+        border-radius: 16px;
+        margin-bottom: 1.5rem;
+        box-shadow: {V["shadow_soft"]};
+    }}
+    .main-header h1 {{
+        color: {V["text"]} !important;
+        font-size: 1.8rem;
+        font-weight: 800;
+        margin: 0;
+        letter-spacing: -0.03em;
+    }}
+    .main-header p {{
+        color: {V["text_muted"]} !important;
+        margin: 0.35rem 0 0 0;
+        font-size: 0.95rem;
+    }}
+
+    /* ============ METRIC CARDS ============ */
+    .metric-card {{
+        background: {V["surface"]};
+        border: 1px solid {V["border"]};
+        padding: 1.25rem 1.4rem;
+        border-radius: 14px;
+        box-shadow: {V["shadow_soft"]};
+        transition: all 0.15s ease;
+        height: 100%;
+    }}
+    .metric-card:hover {{
+        border-color: {V["primary"]};
+        box-shadow: {V["shadow"]};
+        transform: translateY(-1px);
+    }}
+    .metric-card .metric-icon {{
+        font-size: 1.5rem;
+        margin-bottom: 0.5rem;
+        line-height: 1;
+    }}
+    .metric-card .metric-value {{
+        color: {V["text"]};
+        font-size: 1.7rem;
+        font-weight: 800;
+        line-height: 1.1;
+        letter-spacing: -0.03em;
+    }}
+    .metric-card .metric-label {{
+        color: {V["text_muted"]};
+        font-size: 0.8rem;
+        font-weight: 500;
+        margin-top: 0.25rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }}
+
+    /* ============ RECOMMENDATION / INFO CARDS ============ */
+    .recommendation-card {{
+        background: {V["primary_soft"]};
+        border-left: 3px solid {V["primary"]};
+        padding: 0.85rem 1.15rem;
+        border-radius: 10px;
+        margin: 0.5rem 0;
+        color: {V["text"]};
+        font-size: 0.9rem;
+    }}
+    .info-banner {{
+        background: {V["primary_soft"]};
+        border-left: 3px solid {V["primary"]};
+        padding: 0.85rem 1.15rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+        color: {V["text"]};
+    }}
+
+    /* ============ BADGES ============ */
+    .password-strength-bar {{
+        height: 6px;
+        border-radius: 3px;
+        margin: 0.4rem 0;
+        overflow: hidden;
+    }}
+    .role-badge {{
+        display: inline-block;
+        padding: 0.25rem 0.65rem;
+        border-radius: 6px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }}
+
+    /* ============ SIDEBAR ============ */
+    section[data-testid="stSidebar"] {{
+        background-color: {V["sidebar_bg"]};
+        border-right: 1px solid {V["sidebar_border"]};
+    }}
+    section[data-testid="stSidebar"] > div:first-child {{
+        padding-top: 1rem;
+    }}
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 {{
+        color: {V["sidebar_text"]} !important;
+    }}
+    section[data-testid="stSidebar"] .stMarkdown p,
+    section[data-testid="stSidebar"] .stMarkdown span {{
+        color: {V["sidebar_text"]};
+    }}
+    section[data-testid="stSidebar"] .stCaption,
+    section[data-testid="stSidebar"] small {{
+        color: {V["sidebar_text_dim"]} !important;
+    }}
+
+    /* Sidebar buttons */
+    section[data-testid="stSidebar"] .stButton > button {{
+        background-color: transparent !important;
+        border: 1px solid {V["sidebar_border"]} !important;
+        color: {V["sidebar_text"]} !important;
+        border-radius: 8px !important;
+        font-weight: 500 !important;
+        transition: all 0.15s ease !important;
+    }}
+    section[data-testid="stSidebar"] .stButton > button:hover {{
+        background-color: {V["sidebar_hover"]} !important;
+        border-color: {V["primary"]} !important;
+        color: {V["primary"]} !important;
+    }}
+
+    /* Sidebar radio (custom nav) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] {{
+        gap: 0.15rem;
+    }}
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label {{
+        background-color: transparent;
+        padding: 0.5rem 0.75rem;
+        border-radius: 8px;
+        border-left: 3px solid transparent;
+        transition: all 0.15s ease;
+        cursor: pointer;
+        margin: 0;
+    }}
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {{
+        background-color: {V["sidebar_hover"]};
+    }}
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {{
+        background-color: {V["sidebar_selected_bg"]};
+        border-left-color: {V["primary"]};
+    }}
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label p {{
+        color: {V["sidebar_text"]};
+        font-size: 0.85rem;
+        font-weight: 500;
+        margin: 0;
+    }}
+
+    /* Sidebar selectbox / toggle */
+    section[data-testid="stSidebar"] .stSelectbox label,
+    section[data-testid="stSidebar"] .stToggle label {{
+        color: {V["sidebar_text_dim"]} !important;
+        font-size: 0.8rem !important;
+    }}
+    section[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div {{
+        background-color: {V["surface_2"]} !important;
+        border-color: {V["sidebar_border"]} !important;
+        color: {V["sidebar_text"]} !important;
+    }}
+
+    /* ============ INPUTS ============ */
+    .stTextInput input,
+    .stNumberInput input,
+    .stTextArea textarea,
+    .stDateInput input,
+    .stTimeInput input {{
+        background-color: {V["input_bg"]} !important;
+        color: {V["text"]} !important;
+        border: 1px solid {V["border"]} !important;
+        border-radius: 8px !important;
+        font-size: 0.9rem !important;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }}
+    .stTextInput input:focus,
+    .stNumberInput input:focus,
+    .stTextArea textarea:focus,
+    .stDateInput input:focus {{
+        border-color: {V["primary"]} !important;
+        box-shadow: 0 0 0 3px {V["primary_soft"]} !important;
+    }}
+    .stTextInput input::placeholder,
+    .stTextArea textarea::placeholder {{
+        color: {V["text_dim"]} !important;
+    }}
+
+    /* Labels */
+    .stTextInput label,
+    .stNumberInput label,
+    .stTextArea label,
+    .stDateInput label,
+    .stTimeInput label,
+    .stSelectbox label,
+    .stMultiSelect label,
+    .stSlider label,
+    .stFileUploader label {{
+        color: {V["text"]} !important;
+        font-weight: 500 !important;
+        font-size: 0.85rem !important;
+    }}
+
+    /* ============ SELECT / MULTISELECT ============ */
+    .stSelectbox [data-baseweb="select"] > div,
+    .stMultiSelect [data-baseweb="select"] > div {{
+        background-color: {V["input_bg"]} !important;
+        border-color: {V["border"]} !important;
+        border-radius: 8px !important;
+        color: {V["text"]} !important;
+        font-size: 0.9rem !important;
+    }}
+    .stSelectbox [data-baseweb="select"] svg,
+    .stMultiSelect [data-baseweb="select"] svg {{
+        fill: {V["text_muted"]} !important;
+    }}
+    [data-baseweb="popover"] {{
+        background-color: {V["surface"]} !important;
+        border: 1px solid {V["border"]} !important;
+        border-radius: 10px !important;
+        box-shadow: {V["shadow"]} !important;
+    }}
+    [role="listbox"] {{
+        background-color: {V["surface"]} !important;
+    }}
+    [role="option"] {{
+        color: {V["text"]} !important;
+        font-size: 0.88rem !important;
+    }}
+    [role="option"]:hover,
+    [role="option"][aria-selected="true"] {{
+        background-color: {V["primary_soft"]} !important;
+        color: {V["primary"]} !important;
+    }}
+
+    /* ============ BUTTONS ============ */
+    .stButton > button,
+    .stDownloadButton > button,
+    .stFormSubmitButton > button {{
+        background-color: {V["primary"]} !important;
+        color: #ffffff !important;
+        border: none !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        font-size: 0.88rem !important;
+        padding: 0.5rem 1rem !important;
+        transition: background-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease !important;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    }}
+    .stButton > button:hover,
+    .stDownloadButton > button:hover,
+    .stFormSubmitButton > button:hover {{
+        background-color: {V["primary_hover"]} !important;
+        box-shadow: 0 4px 12px {V["primary_soft"]} !important;
+    }}
+    .stButton > button:active {{
+        transform: translateY(1px);
+    }}
+    .stButton > button[kind="secondary"],
+    button[data-testid="baseButton-secondary"] {{
+        background-color: {V["surface"]} !important;
+        color: {V["text"]} !important;
+        border: 1px solid {V["border"]} !important;
+    }}
+    .stButton > button[kind="secondary"]:hover {{
+        background-color: {V["surface_2"]} !important;
+        border-color: {V["primary"]} !important;
+        color: {V["primary"]} !important;
+    }}
+
+    /* ============ TABS ============ */
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 0.25rem;
+        background-color: transparent;
+        border-bottom: 1px solid {V["border"]};
+        padding-bottom: 0;
+    }}
+    .stTabs [data-baseweb="tab"] {{
+        background-color: transparent;
+        color: {V["text_muted"]};
+        border-radius: 8px 8px 0 0;
+        padding: 0.6rem 1rem;
+        font-weight: 500;
+        font-size: 0.88rem;
+        border-bottom: 2px solid transparent;
+        transition: all 0.15s ease;
+    }}
+    .stTabs [data-baseweb="tab"]:hover {{
+        color: {V["text"]};
+        background-color: {V["surface_2"]};
+    }}
+    .stTabs [aria-selected="true"] {{
+        color: {V["primary"]} !important;
+        border-bottom-color: {V["primary"]} !important;
+        font-weight: 600;
+    }}
+    .stTabs [data-baseweb="tab-highlight"] {{
+        background-color: {V["primary"]};
+    }}
+
+    /* ============ EXPANDER ============ */
+    [data-testid="stExpander"] {{
+        background-color: {V["surface"]};
+        border: 1px solid {V["border"]};
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: {V["shadow_soft"]};
+    }}
+    [data-testid="stExpander"] summary {{
+        background-color: {V["surface"]};
+        color: {V["text"]};
+        font-weight: 600;
+        font-size: 0.9rem;
+        padding: 0.75rem 1rem;
+    }}
+    [data-testid="stExpander"] summary:hover {{
+        background-color: {V["surface_2"]};
+    }}
+    [data-testid="stExpander"] summary p {{
+        color: {V["text"]} !important;
+    }}
+
+    /* ============ DATAFRAMES ============ */
+    [data-testid="stDataFrame"] {{
+        border: 1px solid {V["border"]};
+        border-radius: 10px;
+        overflow: hidden;
+        background-color: {V["surface"]};
+    }}
+    [data-testid="stDataFrame"] [role="columnheader"] {{
+        background-color: {V["surface_2"]} !important;
+        color: {V["text"]} !important;
+        font-weight: 600 !important;
+        font-size: 0.8rem !important;
+        border-bottom: 1px solid {V["border"]} !important;
+    }}
+    [data-testid="stDataFrame"] [role="gridcell"] {{
+        color: {V["text"]} !important;
+        background-color: {V["surface"]} !important;
+        font-size: 0.85rem !important;
+    }}
+    [data-testid="stDataFrame"] [role="row"]:hover [role="gridcell"] {{
+        background-color: {V["surface_2"]} !important;
+    }}
+
+    /* ============ METRICS ============ */
+    [data-testid="stMetric"] {{
+        background-color: {V["surface"]};
+        padding: 0.85rem 1rem;
+        border-radius: 12px;
+        border: 1px solid {V["border"]};
+        box-shadow: {V["shadow_soft"]};
+    }}
+    [data-testid="stMetricValue"] {{
+        color: {V["text"]} !important;
+        font-weight: 700 !important;
+        font-size: 1.5rem !important;
+    }}
+    [data-testid="stMetricLabel"] {{
+        color: {V["text_muted"]} !important;
+        font-size: 0.8rem !important;
+        font-weight: 500 !important;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }}
+    [data-testid="stMetricDelta"] {{
+        font-size: 0.8rem !important;
+    }}
+
+    /* ============ ALERTS ============ */
+    [data-testid="stAlert"] {{
+        border-radius: 10px;
+        border: 1px solid {V["border"]};
+        background-color: {V["surface"]};
+        padding: 0.85rem 1rem;
+    }}
+    [data-testid="stAlert"] p {{
+        color: {V["text"]} !important;
+        font-size: 0.88rem;
+        margin: 0;
+    }}
+
+    /* ============ FILE UPLOADER ============ */
+    [data-testid="stFileUploader"] {{
+        background-color: {V["surface"]};
+        border: 1px solid {V["border"]};
+        border-radius: 12px;
+        padding: 0.5rem;
+    }}
+    [data-testid="stFileUploader"] section,
+    [data-testid="stFileUploadDropzone"] {{
+        background-color: {V["surface_2"]};
+        border: 2px dashed {V["border"]};
+        border-radius: 10px;
+        transition: border-color 0.15s ease;
+    }}
+    [data-testid="stFileUploadDropzone"]:hover {{
+        border-color: {V["primary"]};
+        background-color: {V["primary_soft"]};
+    }}
+    [data-testid="stFileUploadDropzone"] span,
+    [data-testid="stFileUploadDropzone"] small {{
+        color: {V["text_muted"]} !important;
+    }}
+    [data-testid="stFileUploadDropzone"] button {{
+        background-color: {V["primary"]} !important;
+        color: #ffffff !important;
+        border: none !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+    }}
+
+    /* ============ RADIO / CHECKBOX ============ */
+    .stRadio > div {{
+        gap: 0.5rem;
+    }}
+    .stRadio label,
+    .stCheckbox label {{
+        color: {V["text"]} !important;
+        font-size: 0.88rem !important;
+    }}
+
+    /* ============ PROGRESS ============ */
+    .stProgress > div > div {{
+        background-color: {V["surface_2"]};
+        border-radius: 4px;
+    }}
+    .stProgress > div > div > div {{
+        background-color: {V["primary"]};
+        border-radius: 4px;
+    }}
+
+    /* ============ CHARTS ============ */
+    .js-plotly-plot,
+    .plot-container {{
+        background-color: transparent !important;
+    }}
+    .js-plotly-plot .plotly .main-svg {{
+        background-color: transparent !important;
+    }}
+
+    /* ============ DIVIDERS ============ */
+    hr {{
+        border: none;
+        border-top: 1px solid {V["border"]};
+        margin: 1.25rem 0;
+    }}
+
+    /* ============ SCROLLBAR ============ */
+    ::-webkit-scrollbar {{
+        width: 8px;
+        height: 8px;
+    }}
+    ::-webkit-scrollbar-track {{
+        background: transparent;
+    }}
+    ::-webkit-scrollbar-thumb {{
+        background: {V["border"]};
+        border-radius: 4px;
+    }}
+    ::-webkit-scrollbar-thumb:hover {{
+        background: {V["text_dim"]};
+    }}
+
+    /* ============ CODE / JSON ============ */
+    code {{
+        background-color: {V["surface_2"]} !important;
+        color: {V["primary"]} !important;
+        border-radius: 6px !important;
+        padding: 0.1rem 0.35rem !important;
+        font-size: 0.85rem !important;
+    }}
+    pre {{
+        background-color: {V["surface_2"]} !important;
+        border: 1px solid {V["border"]} !important;
+        border-radius: 10px !important;
+    }}
+    pre code {{
+        color: {V["text"]} !important;
+        background-color: transparent !important;
+    }}
+
+    /* ============ MODAL / TOAST ============ */
+    [data-testid="stModal"] {{
+        background-color: {V["surface"]} !important;
+        border: 1px solid {V["border"]} !important;
+        border-radius: 14px !important;
+    }}
+    [data-testid="stToast"] {{
+        background-color: {V["surface"]} !important;
+        color: {V["text"]} !important;
+        border: 1px solid {V["border"]} !important;
+        border-radius: 10px !important;
+    }}
+
+    /* ============ FORM ============ */
+    [data-testid="stForm"] {{
+        background-color: {V["surface"]};
+        border: 1px solid {V["border"]};
+        border-radius: 14px;
+        padding: 1.25rem;
+        box-shadow: {V["shadow_soft"]};
+    }}
+
+    /* ============ MOBILE RESPONSIVE ============ */
+    @media (max-width: 768px) {{
+        .main-header {{
+            padding: 1.25rem 1rem !important;
+        }}
+        .main-header h1 {{
+            font-size: 1.4rem !important;
+        }}
+        .metric-card {{
+            padding: 1rem !important;
+        }}
+        .metric-card .metric-value {{
+            font-size: 1.35rem !important;
+        }}
+        .main .block-container {{
+            padding-left: 0.75rem !important;
+            padding-right: 0.75rem !important;
+        }}
+    }}
+    @media (hover: none) {{
+        .stButton > button {{
+            min-height: 44px;
+        }}
+    }}
+    </style>
+    """, unsafe_allow_html=True)
 
 
 apply_theme()
@@ -705,23 +1252,23 @@ if "language" not in st.session_state or not st.session_state.language:
 # ============================================================
 with st.sidebar:
     st.markdown(f"""
-        <div style="text-align: center; padding: 1rem 0;">
-            <h2 style="color: white; margin: 0;">🎓 Pro Analyzer</h2>
-            <p style="color: rgba(255,255,255,0.7); font-size: 0.85rem;">v12.0.0</p>
+        <div style="text-align: center; padding: 0.5rem 0 1rem 0;">
+            <h2 style="color: inherit; margin: 0; font-size: 1.15rem; font-weight: 700; letter-spacing: -0.02em;">🎓 Pro Analyzer</h2>
+            <p style="color: #94a3b8; font-size: 0.72rem; margin: 0.25rem 0 0 0;">v12.0.0</p>
         </div>
     """, unsafe_allow_html=True)
 
     st.markdown(f"""
-        <div style="background: rgba(255,255,255,0.1); padding: 0.75rem; border-radius: 10px; margin-bottom: 1rem;">
-            <p style="color: white; margin: 0; font-weight: 600;">👤 {user_name}</p>
-            <p style="color: rgba(255,255,255,0.7); margin: 0.25rem 0 0 0; font-size: 0.8rem;">@{user['username']}</p>
+        <div style="background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.15); padding: 0.75rem 0.85rem; border-radius: 10px; margin-bottom: 1rem;">
+            <p style="color: inherit; margin: 0; font-weight: 600; font-size: 0.88rem;">👤 {user_name}</p>
+            <p style="color: #94a3b8; margin: 0.15rem 0 0 0; font-size: 0.75rem;">@{user['username']}</p>
             <div style="margin-top: 0.5rem;">{get_role_badge(user_role)}</div>
         </div>
     """, unsafe_allow_html=True)
 
     col_a, col_b = st.columns([3, 1])
     with col_a:
-        st.markdown("**🌙 Dark**")
+        st.markdown("**🌙 Dark Mode**")
     with col_b:
         is_dark = st.session_state.theme == "dark"
         toggled = st.toggle("d", value=is_dark, key="theme_toggle", label_visibility="collapsed")
@@ -800,12 +1347,14 @@ with st.sidebar:
         menu_icon="cast", default_index=0,
         styles={
             "container": {"padding": "0!important", "background-color": "transparent"},
-            "icon": {"color": "#667eea", "font-size": "1.05rem"},
-            "nav-link": {"font-size": "0.85rem", "text-align": "left",
+            "icon": {"color": "#6366f1", "font-size": "0.95rem"},
+            "nav-link": {"font-size": "0.83rem", "text-align": "left",
                          "margin": "0.1rem 0", "padding": "0.45rem 0.7rem",
-                         "border-radius": "8px", "color": "rgba(255,255,255,0.85)"},
-            "nav-link-selected": {"background": "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-                                  "color": "white", "font-weight": "500"},
+                         "border-radius": "8px", "color": "inherit",
+                         "--hover-color": "rgba(99,102,241,0.08)"},
+            "nav-link-selected": {"background-color": "rgba(99,102,241,0.14)",
+                                  "color": "#6366f1", "font-weight": "600",
+                                  "border-left": "3px solid #6366f1"},
         }
     )
 
@@ -923,14 +1472,14 @@ elif selected == t("analyze"):
     if st.session_state.analyze_result:
         res = st.session_state.analyze_result
         st.markdown("---")
-        gc = {"A+": "#10b981", "A": "#34d399", "B": "#fbbf24", "C": "#f59e0b", "D": "#f97316", "E": "#ef4444", "F": "#dc2626"}.get(res["grade"], "#667eea")
+        gc = {"A+": "#10b981", "A": "#34d399", "B": "#fbbf24", "C": "#f59e0b", "D": "#f97316", "E": "#ef4444", "F": "#dc2626"}.get(res["grade"], "#6366f1")
         st.markdown(f"""
             <div style="text-align: center; padding: 1rem 0;">
                 <h2>Overall Grade</h2>
-                <div style="font-size: 3rem; font-weight: 700; padding: 1.5rem 3rem;
+                <div style="font-size: 2.5rem; font-weight: 800; padding: 1.2rem 2.5rem;
                             border-radius: 100px; display: inline-block;
-                            background: linear-gradient(135deg, {gc}, {gc}dd); color: white;">
-                    {res['grade']} <span style="font-size: 1.5rem;">(GPA: {res['grade_points']})</span>
+                            background: {gc}; color: white; box-shadow: 0 4px 20px rgba(0,0,0,0.15);">
+                    {res['grade']} <span style="font-size: 1.3rem;">(GPA: {res['grade_points']})</span>
                 </div>
             </div>
         """, unsafe_allow_html=True)
@@ -1767,25 +2316,71 @@ elif selected == t("profile"):
             s = prof["student"]
 
             # ---- Header with photo ----
+                      # ---- Header with photo (robust display + avatar fallback) ----
             c1, c2 = st.columns([1, 3])
             with c1:
                 photo_url = get_student_photo_url(s.get("photo_url"))
-                if photo_url:
-                    try:
-                        test_r = requests.head(photo_url, timeout=3)
-                        if test_r.status_code == 200:
-                            st.image(photo_url, width=150, caption=s["name"])
-                        else:
-                            st.markdown("### 📸")
-                            st.caption(f"⚠️ Photo URL: {test_r.status_code}")
-                    except Exception:
-                        st.markdown("### 📸")
-                        st.caption("Photo load failed")
-                else:
-                    st.markdown("### 📸")
-                    st.caption("No photo")
 
-                # Photo upload
+                # ---------- Helper: render photo bytes or a styled avatar ----------
+                def _render_photo_or_avatar(url, name: str):
+                    """Show the photo if loadable & non-degenerate; else show initial avatar."""
+                    initials = "".join(
+                        part[0].upper() for part in (name or "?").split()[:2]
+                    ) or "?"
+
+                    avatar_html = f"""
+                        <div style="width: 150px; height: 150px; border-radius: 16px;
+                                    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+                                    display: flex; align-items: center; justify-content: center;
+                                    color: #ffffff; font-size: 3rem; font-weight: 700;
+                                    letter-spacing: 0.05em;
+                                    box-shadow: 0 6px 20px rgba(99,102,241,0.25);
+                                    margin-bottom: 0.5rem;">
+                            {initials}
+                        </div>
+                    """
+
+                    if not url:
+                        st.markdown(avatar_html, unsafe_allow_html=True)
+                        st.caption("No photo uploaded")
+                        return
+
+                    # Cache-buster so re-uploads appear immediately
+                    sep = "&" if "?" in url else "?"
+                    fetch_url = f"{url}{sep}t={int(datetime.now().timestamp())}"
+
+                    try:
+                        img_resp = requests.get(fetch_url, timeout=6)
+                    except Exception as _e:
+                        st.markdown(avatar_html, unsafe_allow_html=True)
+                        st.caption(f"⚠️ Photo load failed: {type(_e).__name__}")
+                        return
+
+                    if img_resp.status_code != 200 or not img_resp.content:
+                        st.markdown(avatar_html, unsafe_allow_html=True)
+                        st.caption(f"⚠️ Photo unavailable (HTTP {img_resp.status_code})")
+                        return
+
+                    img_bytes = img_resp.content
+
+                    # Detect degenerate (e.g. 1×1) images when Pillow is available
+                    try:
+                        from PIL import Image as _PILImage
+                        _im = _PILImage.open(io.BytesIO(img_bytes))
+                        _w, _h = _im.size
+                        if _w <= 2 or _h <= 2:
+                            st.markdown(avatar_html, unsafe_allow_html=True)
+                            st.caption("⚠️ Uploaded image is too small — please upload a real photo")
+                            return
+                    except Exception:
+                        # PIL missing or image not parseable — just try to render it
+                        pass
+
+                    st.image(img_bytes, width=150, caption=name)
+
+                _render_photo_or_avatar(photo_url, s["name"])
+
+                # ---- Photo upload ----
                 if user_role in ["admin", "teacher"]:
                     uploaded = st.file_uploader(
                         "Upload Photo",
@@ -1829,7 +2424,6 @@ elif selected == t("profile"):
                 with c_b: st.metric("🏆 Grade", s["grade"])
                 with c_c: st.metric("📈 Total", f"{s['total_marks']:.0f}")
                 with c_d: st.metric("📚 Subjects", len(s.get("subjects", [])))
-
             st.markdown("---")
 
             # Edit profile
@@ -2090,14 +2684,14 @@ elif selected == t("live"):
                 event_time_str = "unknown"
 
             st.markdown(f"""
-            <div style="background: rgba(102, 126, 234, 0.05);
-                        border-left: 4px solid {color};
+            <div style="background: rgba(99,102,241,0.05);
+                        border-left: 3px solid {color};
                         padding: 0.75rem 1rem;
                         border-radius: 8px;
                         margin: 0.5rem 0;">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
-                        <span style="font-size: 1.2rem;">{icon}</span>
+                        <span style="font-size: 1.1rem;">{icon}</span>
                         <b style="margin-left: 0.5rem;">{label}</b>
                     </div>
                     <small style="color: #6b7280;">{event_time_str}</small>

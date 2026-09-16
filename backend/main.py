@@ -3267,9 +3267,32 @@ def list_auto_backups(user=Depends(require_admin)):
 def create_scheduled_report(data: ScheduledReportCreate, user=Depends(require_admin)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(_q("""INSERT INTO scheduled_reports (report_type, recipients, schedule, enabled)
-            VALUES (?, ?, ?, ?)"""),
-            (data.report_type, data.recipients, data.schedule, 1 if data.enabled else 0))
+
+        if USE_POSTGRES:
+            # Postgres: compute next id manually (no identity column)
+            cursor.execute("SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM scheduled_reports")
+            row = cursor.fetchone()
+            next_id = row["next_id"] if isinstance(row, dict) else row[0]
+
+            cursor.execute(_q("""
+                INSERT INTO scheduled_reports
+                    (id, report_type, recipients, schedule, last_sent, enabled, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """), (
+                next_id,
+                data.report_type,
+                data.recipients,
+                data.schedule,
+                None,                              # last_sent
+                1 if data.enabled else 0,          # enabled
+                datetime.utcnow().isoformat(),     # created_at
+            ))
+        else:
+            # SQLite: original behavior (AUTOINCREMENT handles id)
+            cursor.execute(_q("""INSERT INTO scheduled_reports (report_type, recipients, schedule, enabled)
+                VALUES (?, ?, ?, ?)"""),
+                (data.report_type, data.recipients, data.schedule, 1 if data.enabled else 0))
+
         conn.commit()
     return {"message": "Scheduled report created"}
 

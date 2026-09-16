@@ -1,57 +1,69 @@
-﻿# ============================================================
-# Backups (Phase 3/4 cleanup)
-# ============================================================
-*.backup_*
-*.bak_*
-*_backup_*.py
-*_backup_*.txt
-app_backup*.py
-README.md.txt
-
-# Python cache
+﻿# Python
 __pycache__/
 *.py[cod]
-*.pyo
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
 
-# ML models
-backend/models/*.pkl
-backend/models/*.joblib
-backend/models/*.h5
+# Virtual envs
+venv/
+env/
+.venv/
+ENV/
 
-# Database
+# Streamlit
+.streamlit/secrets.toml
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Databases
 *.db
 *.db-journal
-*.db-shm
 *.db-wal
-*.sqlite
-*.sqlite3
+*.db-shm
+*.db.bak
 
-# Environment
-.env
-.env.local
-.env.*.local
+# Backups
+backups/auto/*.zip
+backups/*.zip
+*.bak
+_backups_phase3/
+_archive/
 
-# Uploads & backups
-backend/uploads/*
-backend/backups/*
-backend/reports/*
-uploads/
-backups/
-reports/
+# Uploads (PII — student photos)
+backend/uploads/photos/*
+!backend/uploads/photos/.gitkeep
+
+# Generated PDFs
+backend/reports/*.pdf
+
+# ML model binaries (regenerate via /ml/train)
+backend/models/*.pkl
+backend/models/*.json
+!backend/models/.gitignore
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
 
 # IDE
 .vscode/
 .idea/
 *.swp
 
-# OS
-.DS_Store
-Thumbs.db
+# Logs
+*.log
 
-backend/models/grade_predictor.pkl
-backend/models/risk_classifier.pkl
-backend/models/model_meta.json
+# Snapshots
+*_snapshot_*.zip
 
-backend/models/grade_predictor.pkl
-backend/models/risk_classifier.pkl
-backend/models/model_meta.json
+# ML model binaries (regenerate via /ml/train)
+backend/models/*.pkl
+backend/models/*.json
