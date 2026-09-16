@@ -8,98 +8,179 @@ import json
 import time
 import os
 import re
+import base64
+import io
 from streamlit_option_menu import option_menu
 
-# ============================================================
-# PAGE CONFIG
-# ============================================================
 st.set_page_config(
     page_title="Student Marks Analyzer Pro",
     page_icon="🎓",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
+
+# PWA support
+st.markdown("""
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+    <meta name="theme-color" content="#667eea">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <style>
+    @media (max-width: 768px) {
+        .main-header { padding: 1.5rem 1rem !important; }
+        .main-header h1 { font-size: 1.5rem !important; }
+        .metric-card { padding: 1rem !important; }
+        .metric-card .metric-value { font-size: 1.3rem !important; }
+        .block-container { padding: 1rem 0.5rem !important; }
+    }
+    @media (hover: none) {
+        .stButton > button { min-height: 44px; }
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 SESSION_TIMEOUT_MINUTES = 30
 
 # ============================================================
+# TRANSLATIONS
+# ============================================================
+TRANSLATIONS = {
+    "en": {
+        "dashboard": "🏠 Dashboard",
+        "analyze": "📝 Analyze",
+        "database": "📚 Database",
+        "analytics": "📊 Analytics",
+        "reports": "📈 Reports",
+        "attendance": "📅 Attendance",
+        "notifications": "🔔 Notifications",
+        "compare": "🔄 Compare",
+        "trends": "📉 Trends",
+        "import_export": "📤 Import/Export",
+        "users": "👥 Users",
+        "audit": "📋 Audit Log",
+        "classes": "🏫 Classes",
+        "profile": "👤 Profile",
+        "security": "🔒 Security",
+        "parent_links": "👨‍👩‍👧 Parent Links",
+        "my_children": "👨‍👩‍👧 My Children",
+        "my_results": "📊 My Results",
+        "my_progress": "📉 My Progress",
+        "welcome": "Welcome",
+        "logout": "🚪 Logout",
+        "change_password": "🔑 Change Password",
+        # Phase 3
+        "exams": "📅 Exams",
+        "timetable": "📆 Timetable",
+        "assignments": "📝 Assignments",
+        "fees": "💰 Fees",
+        "backup": "💾 Backup",
+        "scheduled_reports": "📧 Scheduled Reports",
+        "filters": "🔍 Saved Filters",
+        "live": "🔔 Live Feed",
+        "pdf_templates": "📄 PDF Templates",
+    },
+    "hi": {
+        "dashboard": "🏠 डैशबोर्ड",
+        "analyze": "📝 विश्लेषण",
+        "database": "📚 डेटाबेस",
+        "analytics": "📊 विश्लेषिकी",
+        "reports": "📈 रिपोर्ट",
+        "attendance": "📅 उपस्थिति",
+        "notifications": "🔔 सूचनाएं",
+        "compare": "🔄 तुलना",
+        "trends": "📉 रुझान",
+        "import_export": "📤 आयात/निर्यात",
+        "users": "👥 उपयोगकर्ता",
+        "audit": "📋 ऑडिट लॉग",
+        "classes": "🏫 कक्षाएं",
+        "profile": "👤 प्रोफ़ाइल",
+        "security": "🔒 सुरक्षा",
+        "parent_links": "👨‍👩‍👧 अभिभावक लिंक",
+        "my_children": "👨‍👩‍👧 मेरे बच्चे",
+        "my_results": "📊 मेरे परिणाम",
+        "my_progress": "📉 मेरी प्रगति",
+        "welcome": "स्वागत है",
+        "logout": "🚪 लॉग आउट",
+        "change_password": "🔑 पासवर्ड बदलें",
+        "exams": "📅 परीक्षा",
+        "timetable": "📆 समय-सारणी",
+        "assignments": "📝 असाइनमेंट",
+        "fees": "💰 शुल्क",
+        "backup": "💾 बैकअप",
+        "scheduled_reports": "📧 निर्धारित रिपोर्ट",
+        "filters": "🔍 सहेजे गए फ़िल्टर",
+        "live": "🔔 लाइव फ़ीड",
+        "pdf_templates": "📄 PDF टेम्पलेट",
+    },
+}
+
+
+def t(key):
+    lang = st.session_state.get("language", "en")
+    return TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, key)
+
+
+# ============================================================
 # SESSION STATE
 # ============================================================
 defaults = {
-    'theme': 'light',
-    'token': None,
-    'refresh_token': None,
-    'user': None,
-    'logged_in': False,
-    'analyze_result': None,
-    'last_activity': None,
-    'show_change_password': False,
-    'show_verify_otp': False,
-    'pending_verify_email': None,
-    'pending_verify_phone': None,
-    'reset_step': 1,
-    'reset_identifier': None,
+    "theme": "light", "token": None, "refresh_token": None, "user": None,
+    "logged_in": False, "analyze_result": None, "last_activity": None,
+    "show_change_password": False, "show_verify_otp": False,
+    "pending_verify_email": None, "pending_verify_phone": None,
+    "reset_step": 1, "reset_identifier": None,
+    "language": "en",
+    "requires_2fa": False,
+    "pending_2fa_username": None,
+    "pending_2fa_password": None,
+    "fa_qr": None,
+    "fa_secret": None,
+    "show_bulk_notif": False,
+    "ws_messages": [],
 }
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ============================================================
-# THEME
-# ============================================================
+
 def apply_theme():
-    if st.session_state.theme == 'dark':
+    if st.session_state.theme == "dark":
         st.markdown("""
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
         * { font-family: 'Inter', sans-serif; }
         .stApp { background-color: #0e1117; }
-
         .main-header {
             background: linear-gradient(135deg, #1e3a5f 0%, #2d1b4e 100%);
             padding: 2.5rem 2rem; border-radius: 20px; color: white;
             margin-bottom: 2rem; box-shadow: 0 10px 30px rgba(0,0,0,0.4);
-            position: relative; overflow: hidden;
-        }
-        .main-header::before {
-            content: ''; position: absolute; top: -50%; right: -20%;
-            width: 60%; height: 200%; background: rgba(255,255,255,0.05);
-            transform: rotate(30deg); pointer-events: none;
         }
         .main-header h1 { font-size: 2.3rem; font-weight: 700; margin: 0; color: white; }
         .main-header p { margin: 0.5rem 0 0 0; opacity: 0.9; color: white; }
-
         .metric-card {
             background: #1e1e1e; border: 1px solid #2d2d2d;
             padding: 1.5rem; border-radius: 16px; color: #fafafa;
-            transition: all 0.3s ease;
         }
-        .metric-card:hover { transform: translateY(-4px); box-shadow: 0 8px 25px rgba(0,0,0,0.3); }
         .metric-card .metric-value { color: #fafafa; font-size: 2rem; font-weight: 700; }
         .metric-card .metric-label { color: #a0a0a0; font-size: 0.9rem; }
         .metric-card .metric-icon { font-size: 2rem; margin-bottom: 0.5rem; }
-
         .recommendation-card {
             background: #1e1e1e; border-left: 4px solid #667eea;
             padding: 1rem 1.5rem; border-radius: 12px;
             margin: 0.5rem 0; color: #fafafa;
-            transition: all 0.3s ease;
         }
-        .recommendation-card:hover { transform: translateX(4px); }
-
+        .info-banner {
+            background: rgba(102, 126, 234, 0.15);
+            border-left: 4px solid #667eea;
+            padding: 1rem 1.5rem; border-radius: 10px;
+            margin: 1rem 0;
+        }
         section[data-testid="stSidebar"] {
             background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
         }
         section[data-testid="stSidebar"] * { color: #fafafa !important; }
-
         p, h1, h2, h3, h4, h5, h6, span, div, label, li { color: #fafafa !important; }
-        .stTabs [data-baseweb="tab-list"] { background: #1e1e1e; }
-        .stTabs [data-baseweb="tab"] { color: #fafafa !important; }
-        .stTabs [aria-selected="true"] {
-            background: linear-gradient(135deg, #667eea, #764ba2) !important;
-            color: white !important;
-        }
         .stTextInput input, .stNumberInput input, .stTextArea textarea {
             background-color: #1e1e1e !important; color: #fafafa !important;
             border-color: #333 !important;
@@ -113,18 +194,6 @@ def apply_theme():
             border-radius: 20px; font-size: 0.75rem;
             font-weight: 600; text-transform: uppercase;
         }
-        .otp-box {
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            color: white; padding: 1.5rem; border-radius: 12px;
-            text-align: center; font-size: 2rem; letter-spacing: 8px;
-            font-weight: bold; margin: 1rem 0;
-        }
-        .info-banner {
-            background: rgba(102, 126, 234, 0.15);
-            border-left: 4px solid #667eea;
-            padding: 1rem 1.5rem; border-radius: 10px;
-            margin: 1rem 0;
-        }
         </style>
         """, unsafe_allow_html=True)
     else:
@@ -132,61 +201,35 @@ def apply_theme():
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
         * { font-family: 'Inter', sans-serif; }
-
         .main-header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             padding: 2.5rem 2rem; border-radius: 20px; color: white;
             margin-bottom: 2rem; box-shadow: 0 10px 30px rgba(102,126,234,0.3);
-            position: relative; overflow: hidden;
-        }
-        .main-header::before {
-            content: ''; position: absolute; top: -50%; right: -20%;
-            width: 60%; height: 200%; background: rgba(255,255,255,0.08);
-            transform: rotate(30deg); pointer-events: none;
         }
         .main-header h1 { font-size: 2.3rem; font-weight: 700; margin: 0; color: white; }
         .main-header p { margin: 0.5rem 0 0 0; opacity: 0.9; color: white; }
-
         .metric-card {
             background: white; padding: 1.5rem; border-radius: 16px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.05);
             border: 1px solid rgba(0,0,0,0.03);
-            transition: all 0.3s ease; height: 100%;
         }
-        .metric-card:hover { transform: translateY(-4px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
         .metric-card .metric-value { font-size: 2rem; font-weight: 700; color: #1a1a2e; }
         .metric-card .metric-label { font-size: 0.9rem; color: #6b7280; font-weight: 500; }
         .metric-card .metric-icon { font-size: 2rem; margin-bottom: 0.5rem; }
-
         .recommendation-card {
             background: #f9fafb; padding: 1rem 1.5rem; border-radius: 12px;
             border-left: 4px solid #667eea; margin: 0.5rem 0;
-            transition: all 0.3s ease;
         }
-        .recommendation-card:hover { background: #f3f4f6; transform: translateX(4px); }
-
         .stButton > button {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white; border: none; border-radius: 10px;
             font-weight: 500; padding: 0.5rem 1rem;
-            transition: all 0.3s ease;
         }
-        .stButton > button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(102,126,234,0.4);
-        }
-
         .password-strength-bar { height: 8px; border-radius: 4px; margin: 0.5rem 0; }
         .role-badge {
             display: inline-block; padding: 0.3rem 0.8rem;
             border-radius: 20px; font-size: 0.75rem;
             font-weight: 600; text-transform: uppercase;
-        }
-        .otp-box {
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            color: white; padding: 1.5rem; border-radius: 12px;
-            text-align: center; font-size: 2rem; letter-spacing: 8px;
-            font-weight: bold; margin: 1rem 0;
         }
         .info-banner {
             background: #eff6ff;
@@ -194,21 +237,13 @@ def apply_theme():
             padding: 1rem 1.5rem; border-radius: 10px;
             margin: 1rem 0;
         }
-        ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 10px; }
-        ::-webkit-scrollbar-thumb {
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            border-radius: 10px;
-        }
         </style>
         """, unsafe_allow_html=True)
 
 
 apply_theme()
 
-# ============================================================
-# API HELPERS
-# ============================================================
+
 def get_auth_headers():
     if st.session_state.token:
         return {"Authorization": f"Bearer {st.session_state.token}"}
@@ -231,15 +266,21 @@ def handle_response(resp, show_error=True):
         st.rerun()
     elif resp.status_code == 403:
         if show_error:
-            st.error("🚫 Access denied. You don't have permission.")
+            try:
+                st.error(f"🚫 {resp.json().get('detail', 'Access denied')}")
+            except Exception:
+                st.error("🚫 Access denied")
     elif resp.status_code == 404:
         if show_error:
             st.error("❓ Resource not found")
     elif resp.status_code == 423:
         if show_error:
-            st.error("🔒 Account locked")
+            try:
+                st.error(f"🔒 {resp.json().get('detail', 'Account locked')}")
+            except Exception:
+                st.error("🔒 Account locked")
     elif resp.status_code == 429:
-        st.warning("⏱️ Too many requests. Please wait a moment.")
+        st.warning("⏱️ Too many requests. Please wait.")
     else:
         if show_error:
             try:
@@ -254,9 +295,6 @@ def api_get(endpoint, **kwargs):
         headers = kwargs.pop("headers", {})
         headers.update(get_auth_headers())
         return requests.get(f"{API_URL}{endpoint}", headers=headers, timeout=15, **kwargs)
-    except requests.exceptions.ConnectionError:
-        st.error(f"❌ Cannot connect to backend at {API_URL}")
-        return None
     except Exception as e:
         st.error(f"❌ Network error: {e}")
         return None
@@ -267,9 +305,6 @@ def api_post(endpoint, **kwargs):
         headers = kwargs.pop("headers", {})
         headers.update(get_auth_headers())
         return requests.post(f"{API_URL}{endpoint}", headers=headers, timeout=30, **kwargs)
-    except requests.exceptions.ConnectionError:
-        st.error(f"❌ Cannot connect to backend")
-        return None
     except Exception as e:
         st.error(f"❌ Network error: {e}")
         return None
@@ -295,9 +330,6 @@ def api_delete(endpoint, **kwargs):
         return None
 
 
-# ============================================================
-# UI HELPERS
-# ============================================================
 def password_strength_meter(password):
     if not password:
         return
@@ -310,7 +342,6 @@ def password_strength_meter(password):
     if re.search(r"[!@#$%^&*(),.?\":{}|<>_\-+=\[\]\\\/;'`~]", password): score += 15
     if len(set(password)) > 6: score += 10
     score = min(score, 100)
-
     if score < 40:
         color, label = "#ef4444", "Weak"
     elif score < 60:
@@ -319,7 +350,6 @@ def password_strength_meter(password):
         color, label = "#3b82f6", "Good"
     else:
         color, label = "#10b981", "Strong"
-
     st.markdown(f"""
         <div style="margin: 0.5rem 0;">
             <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
@@ -327,8 +357,7 @@ def password_strength_meter(password):
                 <span style="color: {color}; font-weight: 600;">{label}</span>
             </div>
             <div class="password-strength-bar" style="background: #e5e7eb;">
-                <div style="height: 100%; width: {score}%; background: {color};
-                            border-radius: 4px; transition: all 0.3s;"></div>
+                <div style="height: 100%; width: {score}%; background: {color}; border-radius: 4px;"></div>
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -355,39 +384,71 @@ def render_metric(icon, value, label):
     """, unsafe_allow_html=True)
 
 
+def get_student_photo_url(photo_url):
+    """Convert relative photo URL to full URL."""
+    if not photo_url:
+        return None
+    if photo_url.startswith("http"):
+        return photo_url
+    return f"{API_URL}{photo_url}"
+
+
 # ============================================================
-# LOGIN / REGISTER / FORGOT PASSWORD
+# LOGIN / REGISTER / FORGOT / 2FA
 # ============================================================
 if not st.session_state.logged_in:
-    st.markdown("""
+    st.markdown(f"""
         <div class="main-header" style="text-align: center;">
             <h1>🎓 Student Marks Analyzer Pro</h1>
-            <p>Secure Edition v6.0.0 · OTP Verification</p>
+            <p>Secure Edition v11.0.0</p>
         </div>
     """, unsafe_allow_html=True)
+
+    if st.session_state.get("requires_2fa"):
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.markdown("### 🔐 Two-Factor Authentication")
+            st.info("Enter the 6-digit code from your authenticator app")
+            with st.form("2fa_form"):
+                code = st.text_input("2FA Code", max_chars=6, placeholder="123456")
+                if st.form_submit_button("Verify", use_container_width=True):
+                    if len(code) == 6:
+                        r = requests.post(f"{API_URL}/auth/login", params={
+                            "username": st.session_state.pending_2fa_username,
+                            "password": st.session_state.pending_2fa_password,
+                            "totp_code": code,
+                        })
+                        if r.status_code == 200:
+                            d = r.json()
+                            st.session_state.token = d["access_token"]
+                            st.session_state.refresh_token = d.get("refresh_token")
+                            st.session_state.user = d["user"]
+                            st.session_state.logged_in = True
+                            st.session_state.last_activity = datetime.now()
+                            st.session_state.requires_2fa = False
+                            st.session_state.pending_2fa_username = None
+                            st.session_state.pending_2fa_password = None
+                            st.rerun()
+                        else:
+                            st.error(r.json().get("detail", "Invalid 2FA code"))
+                    else:
+                        st.warning("Enter a 6-digit code")
+            if st.button("← Back to Login"):
+                st.session_state.requires_2fa = False
+                st.rerun()
+        st.stop()
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         tab_login, tab_register, tab_forgot = st.tabs(["🔐 Login", "📝 Register", "🔑 Forgot Password"])
 
-        # ============================================================
-        # LOGIN TAB
-        # ============================================================
         with tab_login:
             st.markdown("### Welcome Back")
             st.caption("Sign in with your username OR email")
-
             with st.form("login_form"):
-                identifier = st.text_input(
-                    "Username or Email",
-                    placeholder="admin  OR  admin@example.com",
-                    help="Enter either your username or your registered email address"
-                )
-                password = st.text_input("Password", type="password", placeholder="••••••••")
-
-                submitted = st.form_submit_button("🚀 Login", use_container_width=True)
-
-                if submitted:
+                identifier = st.text_input("Username or Email", placeholder="admin or admin@example.com")
+                password = st.text_input("Password", type="password")
+                if st.form_submit_button("🚀 Login", use_container_width=True):
                     if not identifier or not password:
                         st.warning("⚠️ Please enter both fields")
                     else:
@@ -395,23 +456,24 @@ if not st.session_state.logged_in:
                             try:
                                 r = requests.post(
                                     f"{API_URL}/auth/login",
-                                    params={
-                                        "username": identifier.strip(),
-                                        "password": password,
-                                    },
+                                    params={"username": identifier.strip(), "password": password},
                                     timeout=15,
                                 )
-
                                 if r.status_code == 200:
                                     d = r.json()
-                                    st.session_state.token = d["access_token"]
-                                    st.session_state.refresh_token = d.get("refresh_token")
-                                    st.session_state.user = d["user"]
-                                    st.session_state.logged_in = True
-                                    st.session_state.last_activity = datetime.now()
-                                    st.success(f"✅ Welcome, {d['user'].get('full_name', d['user']['username'])}!")
-                                    time.sleep(0.5)
-                                    st.rerun()
+                                    if d.get("requires_2fa"):
+                                        st.session_state.requires_2fa = True
+                                        st.session_state.pending_2fa_username = identifier.strip()
+                                        st.session_state.pending_2fa_password = password
+                                        st.rerun()
+                                    else:
+                                        st.session_state.token = d["access_token"]
+                                        st.session_state.refresh_token = d.get("refresh_token")
+                                        st.session_state.user = d["user"]
+                                        st.session_state.language = d["user"].get("language", "en")
+                                        st.session_state.logged_in = True
+                                        st.session_state.last_activity = datetime.now()
+                                        st.rerun()
                                 elif r.status_code == 423:
                                     st.error("🔒 " + r.json().get("detail", "Account locked"))
                                 elif r.status_code == 403:
@@ -422,87 +484,42 @@ if not st.session_state.logged_in:
                                     st.warning("⏱️ Too many attempts. Wait a minute.")
                                 else:
                                     st.error(f"❌ Error: {r.text[:200]}")
-                            except requests.exceptions.ConnectionError:
-                                st.error("❌ Cannot connect to backend. Is it running?")
                             except Exception as e:
                                 st.error(f"❌ {str(e)}")
 
-            st.markdown("---")
             st.info("""
-            **🔐 Default Admin Credentials**
-            - Username: `admin` **OR** email: `admin@example.com`
-            - Password: `Admin@123`
-
-            ⚠️ Change password after first login!
+            **🔐 Default Credentials**
+            - Primary: `admin` / `Admin@123`
+            - Backup: `admin2` / `Admin2@123`
             """)
 
-        # ============================================================
-        # REGISTER TAB
-        # ============================================================
         with tab_register:
             st.markdown("### Create Account")
-
-            reg_role = st.selectbox(
-                "I am a...",
-                ["teacher", "student", "parent"],
-                key="reg_role_select",
-                help="Admin accounts must be created by existing admins"
-            )
-
+            reg_role = st.selectbox("I am a...", ["teacher", "student", "parent"], key="reg_role_select")
             with st.form("register_form"):
-                new_username = st.text_input(
-                    "👤 Username *",
-                    placeholder="johndoe",
-                    help="3-30 chars, letters/numbers/underscores only"
-                )
-                new_email = st.text_input(
-                    "📧 Email *",
-                    placeholder="john@example.com",
-                    help="You'll receive a verification OTP here"
-                )
-                new_phone = st.text_input(
-                    "📱 Phone (optional)",
-                    placeholder="+91 9876543210",
-                    help="Include country code. You'll receive an SMS OTP (console in dev mode)."
-                )
-                new_fullname = st.text_input("📝 Full Name", placeholder="John Doe")
-
+                new_username = st.text_input("👤 Username *", placeholder="johndoe")
+                new_email = st.text_input("📧 Email *", placeholder="john@example.com")
+                new_phone = st.text_input("📱 Phone (optional)", placeholder="+919876543210")
+                new_fullname = st.text_input("📝 Full Name")
                 col_a, col_b = st.columns(2)
                 with col_a:
-                    new_password = st.text_input(
-                        "🔑 Password *",
-                        type="password",
-                        placeholder="Min 8 chars",
-                        help="8+ chars, uppercase, lowercase, digit, special char"
-                    )
+                    new_password = st.text_input("🔑 Password *", type="password")
                 with col_b:
-                    confirm_password = st.text_input(
-                        "🔑 Confirm *",
-                        type="password",
-                        placeholder="Repeat password"
-                    )
-
+                    confirm_password = st.text_input("🔑 Confirm *", type="password")
                 if new_password:
                     password_strength_meter(new_password)
-                    st.caption("💡 8+ chars with uppercase, lowercase, digit, and special char")
-
-                register_submitted = st.form_submit_button("📝 Create Account", use_container_width=True)
-
-                if register_submitted:
+                if st.form_submit_button("📝 Create Account", use_container_width=True):
                     errors = []
                     if not new_username or len(new_username) < 3:
-                        errors.append("Username must be at least 3 characters")
-                    elif not re.match(r'^[a-zA-Z0-9_]+$', new_username):
-                        errors.append("Username: letters, numbers, underscores only")
-
+                        errors.append("Username must be 3+ chars")
+                    elif not re.match(r"^[a-zA-Z0-9_]+$", new_username):
+                        errors.append("Username: letters/numbers/underscores only")
                     if not new_email or "@" not in new_email:
                         errors.append("Valid email required")
-
                     if not new_password or len(new_password) < 8:
-                        errors.append("Password must be 8+ characters")
+                        errors.append("Password must be 8+ chars")
                     elif new_password != confirm_password:
                         errors.append("Passwords don't match")
-
                     if errors:
                         for e in errors:
                             st.error(f"❌ {e}")
@@ -518,146 +535,87 @@ if not st.session_state.logged_in:
                                     "role": reg_role,
                                 }
                                 r = requests.post(f"{API_URL}/auth/register", json=payload, timeout=15)
-
                                 if r.status_code == 200:
                                     d = r.json()
                                     st.session_state.pending_verify_email = d["email"]
                                     st.session_state.pending_verify_phone = d.get("phone")
                                     st.session_state.show_verify_otp = True
-                                    st.success(f"✅ {d['message']}")
-                                    st.info("📧 Check your email for the verification OTP. If DEV_MODE, check the backend console.")
-                                    st.balloons()
+                                    st.success(d["message"])
                                     time.sleep(1)
                                     st.rerun()
-                                elif r.status_code == 400:
-                                    st.error(f"❌ {r.json().get('detail', 'Registration failed')}")
-                                elif r.status_code == 429:
-                                    st.warning("⏱️ Too many attempts. Wait a minute.")
                                 else:
-                                    st.error(f"❌ Error: {r.text[:200]}")
+                                    st.error(r.json().get("detail", "Registration failed"))
                             except Exception as e:
-                                st.error(f"❌ {str(e)}")
+                                st.error(f"❌ {e}")
 
-            # OTP verification section
             if st.session_state.get("show_verify_otp") and st.session_state.get("pending_verify_email"):
                 st.markdown("---")
                 st.markdown("### 🔐 Verify Your Account")
-                st.markdown(f"""
-                    <div class="info-banner">
-                        📧 OTP sent to <b>{st.session_state.pending_verify_email}</b><br>
-                        {f"📱 OTP sent to <b>{st.session_state.pending_verify_phone}</b> (check console in dev mode)" if st.session_state.get('pending_verify_phone') else ""}
-                    </div>
-                """, unsafe_allow_html=True)
-
-                # Email verification
-                st.markdown("#### 📧 Email Verification")
-                email_otp = st.text_input("Enter Email OTP", key="email_otp_input",
-                                          max_chars=6, placeholder="123456")
-
-                if st.button("✅ Verify Email", key="verify_email_btn", use_container_width=True):
-                    if not email_otp:
-                        st.warning("Please enter the OTP")
-                    else:
-                        try:
-                            r = requests.post(f"{API_URL}/auth/verify-otp", json={
-                                "identifier": st.session_state.pending_verify_email,
-                                "otp_code": email_otp.strip(),
-                                "purpose": "verification",
-                            }, timeout=15)
-                            if r.status_code == 200:
-                                st.success("✅ Email verified! You can now log in.")
-                                st.balloons()
-                            else:
-                                st.error(r.json().get("detail", "Invalid OTP"))
-                        except Exception as e:
-                            st.error(f"Error: {e}")
-
-                # Phone verification (if provided)
-                if st.session_state.get("pending_verify_phone"):
-                    st.markdown("#### 📱 Phone Verification")
-                    phone_otp = st.text_input("Enter Phone OTP", key="phone_otp_input",
-                                              max_chars=6, placeholder="123456")
-
-                    if st.button("✅ Verify Phone", key="verify_phone_btn", use_container_width=True):
-                        if not phone_otp:
-                            st.warning("Please enter the OTP")
-                        else:
+                st.info(f"OTP sent to **{st.session_state.pending_verify_email}**")
+                email_otp = st.text_input("Enter OTP", key="email_otp_input", max_chars=6)
+                col_v1, col_v2 = st.columns(2)
+                with col_v1:
+                    if st.button("✅ Verify", key="verify_email_btn", use_container_width=True):
+                        if email_otp:
                             try:
                                 r = requests.post(f"{API_URL}/auth/verify-otp", json={
-                                    "identifier": st.session_state.pending_verify_phone,
-                                    "otp_code": phone_otp.strip(),
-                                    "purpose": "phone_verification",
+                                    "identifier": st.session_state.pending_verify_email,
+                                    "otp_code": email_otp.strip(),
+                                    "purpose": "verification",
                                 }, timeout=15)
                                 if r.status_code == 200:
-                                    st.success("✅ Phone verified!")
+                                    st.success("✅ Verified! You can log in now.")
+                                    st.session_state.show_verify_otp = False
+                                    st.session_state.pending_verify_email = None
                                 else:
                                     st.error(r.json().get("detail", "Invalid OTP"))
                             except Exception as e:
                                 st.error(f"Error: {e}")
+                with col_v2:
+                    if st.button("Resend OTP", key="resend_otp_btn", use_container_width=True):
+                        try:
+                            r = requests.post(f"{API_URL}/auth/resend-otp",
+                                            json={"email": st.session_state.pending_verify_email},
+                                            timeout=15)
+                            if r.status_code == 200:
+                                st.success("New OTP sent")
+                            else:
+                                st.error(r.json().get("detail", "Failed"))
+                        except Exception as e:
+                            st.error(f"Error: {e}")
 
-                if st.button("✖️ Close", key="close_verify"):
-                    st.session_state.show_verify_otp = False
-                    st.rerun()
-
-        # ============================================================
-        # FORGOT PASSWORD TAB
-        # ============================================================
         with tab_forgot:
-            st.markdown("### Reset Your Password")
-            st.caption("Enter your email or phone to receive an OTP")
-
+            st.markdown("### Reset Password")
             if st.session_state.reset_step == 1:
-                reset_id = st.text_input(
-                    "Email or Phone",
-                    placeholder="you@example.com  OR  +919876543210",
-                    key="reset_identifier_input"
-                )
-
+                reset_id = st.text_input("Email or Phone", placeholder="you@example.com")
                 if st.button("📧 Send OTP", use_container_width=True, key="send_reset_otp"):
                     if not reset_id:
-                        st.warning("Please enter your email or phone")
+                        st.warning("Enter email or phone")
                     else:
-                        with st.spinner("Sending OTP..."):
-                            try:
-                                r = requests.post(f"{API_URL}/auth/send-otp", json={
-                                    "identifier": reset_id.strip(),
-                                    "purpose": "reset_password",
-                                }, timeout=15)
-                                if r.status_code == 200:
-                                    d = r.json()
-                                    st.session_state.reset_identifier = reset_id.strip()
-                                    st.session_state.reset_step = 2
-                                    st.success(f"✅ {d['message']}")
-                                    if d.get("delivery") == "console":
-                                        st.info("💡 Check the backend console for the OTP")
-                                    time.sleep(0.5)
-                                    st.rerun()
-                                else:
-                                    st.error(r.json().get("detail", "Failed to send OTP"))
-                            except Exception as e:
-                                st.error(f"Error: {e}")
-
-            elif st.session_state.reset_step == 2:
-                st.markdown(f"""
-                    <div class="info-banner">
-                        📧 OTP sent to <b>{st.session_state.reset_identifier}</b>
-                    </div>
-                """, unsafe_allow_html=True)
-
-                otp_code = st.text_input("Enter OTP", max_chars=6, placeholder="123456", key="reset_otp_input")
-                new_pw = st.text_input("New Password", type="password", key="reset_new_pw")
-
+                        try:
+                            r = requests.post(f"{API_URL}/auth/send-otp",
+                                            json={"identifier": reset_id.strip(),
+                                                  "purpose": "reset_password"},
+                                            timeout=15)
+                            if r.status_code == 200:
+                                st.session_state.reset_identifier = reset_id.strip()
+                                st.session_state.reset_step = 2
+                                st.success("OTP sent")
+                                st.rerun()
+                            else:
+                                st.error(r.json().get("detail", "Failed"))
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+            else:
+                st.info(f"OTP sent to {st.session_state.reset_identifier}")
+                otp_code = st.text_input("OTP", max_chars=6)
+                new_pw = st.text_input("New Password", type="password")
                 if new_pw:
                     password_strength_meter(new_pw)
-
                 c1, c2 = st.columns(2)
                 with c1:
-                    if st.button("✅ Reset Password", use_container_width=True, key="do_reset"):
-                        if not otp_code or not new_pw:
-                            st.warning("Fill both fields")
-                        elif len(new_pw) < 8:
-                            st.warning("Password must be 8+ characters")
-                        else:
+                    if st.button("✅ Reset", use_container_width=True):
+                        if otp_code and new_pw and len(new_pw) >= 8:
                             try:
                                 r = requests.post(f"{API_URL}/auth/reset-password", json={
                                     "identifier": st.session_state.reset_identifier,
@@ -665,95 +623,83 @@ if not st.session_state.logged_in:
                                     "new_password": new_pw,
                                 }, timeout=15)
                                 if r.status_code == 200:
-                                    st.success("✅ Password reset! Please log in.")
+                                    st.success("Password reset! Log in now.")
                                     st.session_state.reset_step = 1
-                                    st.session_state.reset_identifier = None
-                                    time.sleep(1)
                                     st.rerun()
                                 else:
-                                    st.error(r.json().get("detail", "Reset failed"))
+                                    st.error(r.json().get("detail", "Failed"))
                             except Exception as e:
                                 st.error(f"Error: {e}")
-
+                        else:
+                            st.warning("Fill all fields (8+ chars)")
                 with c2:
-                    if st.button("↩️ Back", use_container_width=True, key="reset_back"):
+                    if st.button("Back", use_container_width=True):
                         st.session_state.reset_step = 1
                         st.rerun()
 
     st.stop()
 
-# ============================================================
-# SESSION TIMEOUT
-# ============================================================
+
+# Session timeout
 if st.session_state.last_activity:
     elapsed = (datetime.now() - st.session_state.last_activity).total_seconds() / 60
     if elapsed > SESSION_TIMEOUT_MINUTES:
-        st.warning(f"⏱️ Session expired after {SESSION_TIMEOUT_MINUTES} min of inactivity")
+        st.warning("Session expired")
         st.session_state.logged_in = False
         st.session_state.token = None
         st.session_state.user = None
         time.sleep(1)
         st.rerun()
-
 st.session_state.last_activity = datetime.now()
 
-# ============================================================
-# CHANGE PASSWORD PAGE
-# ============================================================
+
+# Change password page
 if st.session_state.show_change_password:
-    st.markdown("""
-        <div class="main-header">
-            <h1>🔑 Change Password</h1>
-            <p>Update your account password</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        with st.form("change_password_form"):
-            old_pw = st.text_input("Current Password", type="password")
-            new_pw = st.text_input("New Password", type="password")
-            confirm_pw = st.text_input("Confirm New Password", type="password")
-
-            if new_pw:
-                password_strength_meter(new_pw)
-
-            c1, c2 = st.columns(2)
-            with c1:
-                submitted = st.form_submit_button("💾 Save", type="primary", use_container_width=True)
-            with c2:
-                cancelled = st.form_submit_button("❌ Cancel", use_container_width=True)
-
-            if submitted:
-                if not old_pw or not new_pw or not confirm_pw:
-                    st.error("Please fill all fields")
-                elif new_pw != confirm_pw:
-                    st.error("New passwords don't match")
-                elif len(new_pw) < 8:
-                    st.error("Password must be 8+ characters")
+    st.markdown(f'<div class="main-header"><h1>{t("change_password")}</h1></div>', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c2:
+        with st.form("cp_form"):
+            op = st.text_input("Current Password", type="password")
+            np_ = st.text_input("New Password", type="password")
+            cp = st.text_input("Confirm Password", type="password")
+            if np_:
+                password_strength_meter(np_)
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                save = st.form_submit_button("💾 Save", type="primary", use_container_width=True)
+            with cc2:
+                cancel = st.form_submit_button("❌ Cancel", use_container_width=True)
+            if save:
+                if not op or not np_ or not cp:
+                    st.error("Fill all fields")
+                elif np_ != cp:
+                    st.error("Passwords don't match")
+                elif len(np_) < 8:
+                    st.error("Password must be 8+ chars")
                 else:
-                    resp = api_post("/auth/change-password",
-                                    json={"old_password": old_pw, "new_password": new_pw})
-                    if resp and resp.status_code == 200:
-                        st.success("✅ Password changed!")
+                    r = api_post("/auth/change-password",
+                                 json={"old_password": op, "new_password": np_})
+                    if r and r.status_code == 200:
+                        st.success("✅ Changed!")
                         time.sleep(1)
                         st.session_state.show_change_password = False
                         st.rerun()
-                    elif resp and resp.status_code == 400:
-                        st.error(resp.json().get("detail", "Error"))
-
-            if cancelled:
+                    elif r and r.status_code == 400:
+                        st.error(r.json().get("detail", "Error"))
+            if cancel:
                 st.session_state.show_change_password = False
                 st.rerun()
-
     st.stop()
 
-# ============================================================
-# USER INFO
-# ============================================================
+
+# User info
 user = st.session_state.user
 user_role = user.get("role", "teacher")
 user_name = user.get("full_name") or user["username"]
+
+if "language" not in st.session_state or not st.session_state.language:
+    st.session_state.language = user.get("language", "en")
+
 
 # ============================================================
 # SIDEBAR
@@ -762,7 +708,7 @@ with st.sidebar:
     st.markdown(f"""
         <div style="text-align: center; padding: 1rem 0;">
             <h2 style="color: white; margin: 0;">🎓 Pro Analyzer</h2>
-            <p style="color: rgba(255,255,255,0.7); font-size: 0.85rem;">v6.0.0</p>
+            <p style="color: rgba(255,255,255,0.7); font-size: 0.85rem;">v11.0.0</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -776,87 +722,105 @@ with st.sidebar:
 
     col_a, col_b = st.columns([3, 1])
     with col_a:
-        st.markdown("**🌙 Dark Mode**")
+        st.markdown("**🌙 Dark**")
     with col_b:
-        is_dark = st.session_state.theme == 'dark'
-        toggled = st.toggle("dark", value=is_dark, key="theme_toggle", label_visibility="collapsed")
+        is_dark = st.session_state.theme == "dark"
+        toggled = st.toggle("d", value=is_dark, key="theme_toggle", label_visibility="collapsed")
         if toggled != is_dark:
-            st.session_state.theme = 'dark' if toggled else 'light'
+            st.session_state.theme = "dark" if toggled else "light"
             st.rerun()
+
+    lang_choice = st.selectbox(
+        "🌍 Language",
+        ["en", "hi"],
+        format_func=lambda x: "English" if x == "en" else "हिन्दी",
+        index=0 if st.session_state.language == "en" else 1,
+        key="lang_select",
+    )
+    if lang_choice != st.session_state.language:
+        st.session_state.language = lang_choice
+        api_put("/auth/language", json={"language": lang_choice})
+        st.rerun()
 
     st.markdown("---")
 
-    # Role-based menu
+    # Build menu based on role
     if user_role == "admin":
         menu_options = [
-            "🏠 Dashboard", "📝 Analyze", "📚 Database", "📊 Analytics",
-            "📈 Reports", "📅 Attendance", "🔔 Notifications",
-            "🔄 Compare", "📉 Trends", "📤 Import/Export",
-            "👥 Users", "📋 Audit Log"
+            t("dashboard"), t("analyze"), t("database"), t("analytics"),
+            t("reports"), t("attendance"), t("exams"), t("timetable"),
+            t("assignments"), t("fees"), t("classes"), t("parent_links"),
+            t("profile"), t("filters"), t("live"), t("notifications"),
+            t("scheduled_reports"), t("backup"), t("pdf_templates"),
+            t("users"), t("audit"), t("security"),
         ]
         menu_icons = [
             "house", "pencil-square", "database", "bar-chart",
-            "file-earmark-text", "calendar", "bell",
-            "arrow-left-right", "graph-up", "cloud-upload",
-            "people", "journal-text"
+            "file-earmark-text", "calendar", "calendar-check", "calendar-week",
+            "journal-check", "cash-coin", "building", "people",
+            "person-circle", "funnel", "broadcast", "bell",
+            "envelope-paper", "cloud-download", "file-pdf",
+            "person-badge", "journal-text", "shield-lock",
         ]
     elif user_role == "teacher":
         menu_options = [
-            "🏠 Dashboard", "📝 Analyze", "📚 Database", "📊 Analytics",
-            "📈 Reports", "📅 Attendance", "🔔 Notifications",
-            "🔄 Compare", "📉 Trends", "📤 Import/Export"
+            t("dashboard"), t("analyze"), t("database"), t("analytics"),
+            t("reports"), t("attendance"), t("exams"), t("timetable"),
+            t("assignments"), t("fees"), t("classes"), t("profile"),
+            t("filters"), t("live"), t("notifications"), t("pdf_templates"),
         ]
         menu_icons = [
             "house", "pencil-square", "database", "bar-chart",
-            "file-earmark-text", "calendar", "bell",
-            "arrow-left-right", "graph-up", "cloud-upload"
+            "file-earmark-text", "calendar", "calendar-check", "calendar-week",
+            "journal-check", "cash-coin", "building", "person-circle",
+            "funnel", "broadcast", "bell", "file-pdf",
         ]
     elif user_role == "parent":
-        menu_options = ["🏠 Dashboard", "👨‍👩‍👧 My Children", "📊 Progress", "📅 Attendance", "🔔 Notifications"]
-        menu_icons = ["house", "people", "bar-chart", "calendar", "bell"]
-    else:
-        menu_options = ["🏠 Dashboard", "📊 My Results", "📉 My Progress", "📅 My Attendance", "🔔 Notifications"]
-        menu_icons = ["house", "bar-chart", "graph-up", "calendar", "bell"]
+        menu_options = [
+            t("dashboard"), t("my_children"), t("attendance"),
+            t("fees"), t("notifications"), t("live"),
+        ]
+        menu_icons = ["house", "people", "calendar", "cash-coin", "bell", "broadcast"]
+    else:  # student
+        menu_options = [
+            t("dashboard"), t("my_results"), t("my_progress"),
+            t("attendance"), t("assignments"), t("fees"),
+            t("notifications"), t("live"),
+        ]
+        menu_icons = [
+            "house", "bar-chart", "graph-up", "calendar",
+            "journal-check", "cash-coin", "bell", "broadcast",
+        ]
 
     selected = option_menu(
-        menu_title=None,
-        options=menu_options,
-        icons=menu_icons,
-        menu_icon="cast",
-        default_index=0,
+        menu_title=None, options=menu_options, icons=menu_icons,
+        menu_icon="cast", default_index=0,
         styles={
             "container": {"padding": "0!important", "background-color": "transparent"},
-            "icon": {"color": "#667eea", "font-size": "1.1rem"},
-            "nav-link": {
-                "font-size": "0.9rem", "text-align": "left",
-                "margin": "0.15rem 0", "padding": "0.6rem 0.8rem",
-                "border-radius": "8px", "color": "rgba(255,255,255,0.85)"
-            },
-            "nav-link-selected": {
-                "background": "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-                "color": "white", "font-weight": "500"
-            }
+            "icon": {"color": "#667eea", "font-size": "1.05rem"},
+            "nav-link": {"font-size": "0.85rem", "text-align": "left",
+                         "margin": "0.1rem 0", "padding": "0.45rem 0.7rem",
+                         "border-radius": "8px", "color": "rgba(255,255,255,0.85)"},
+            "nav-link-selected": {"background": "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                                  "color": "white", "font-weight": "500"},
         }
     )
 
     st.markdown("---")
-
     try:
         r = requests.get(f"{API_URL}/health", timeout=3)
         if r.status_code == 200:
-            st.success("🟢 System Online")
+            st.success("🟢 Online")
         else:
-            st.error("🔴 System Offline")
+            st.error("🔴 Offline")
     except Exception:
         st.error("🔴 Connection Failed")
 
     st.markdown("---")
-
-    if st.button("🔑 Change Password", use_container_width=True):
+    if st.button(f"🔑 {t('change_password').replace('🔑 ', '')}", use_container_width=True):
         st.session_state.show_change_password = True
         st.rerun()
-
-    if st.button("🚪 Logout", use_container_width=True):
+    if st.button(t("logout"), use_container_width=True):
         try:
             api_post("/auth/logout")
         except Exception:
@@ -864,114 +828,68 @@ with st.sidebar:
         for k in list(st.session_state.keys()):
             del st.session_state[k]
         st.rerun()
-
 # ============================================================
 # PAGE: DASHBOARD
 # ============================================================
-if selected == "🏠 Dashboard":
+if selected == t("dashboard"):
     st.markdown(f"""
         <div class="main-header">
-            <h1>🏠 Welcome, {user_name}!</h1>
+            <h1>🏠 {t('welcome')}, {user_name}!</h1>
             <p>Your personalized dashboard</p>
         </div>
     """, unsafe_allow_html=True)
 
     resp = api_get("/stats/overall")
-    stats = handle_response(resp) if resp else None
+    stats = handle_response(resp, show_error=False) if resp else None
 
     if stats and "total_students" in stats:
         c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            render_metric("👥", stats["total_students"], "Total Students")
-        with c2:
-            render_metric("📈", f"{stats['average_of_averages']:.1f}", "Average Score")
-        with c3:
-            render_metric("✅", f"{stats['pass_rate']:.0f}%", "Pass Rate")
-        with c4:
-            render_metric("🏆", f"{stats['distinction_rate']:.0f}%", "Distinction")
+        with c1: render_metric("👥", stats["total_students"], "Total Students")
+        with c2: render_metric("📈", f"{stats['average_of_averages']:.1f}", "Average Score")
+        with c3: render_metric("✅", f"{stats['pass_rate']:.0f}%", "Pass Rate")
+        with c4: render_metric("🏆", f"{stats['distinction_rate']:.0f}%", "Distinction")
 
         st.markdown("---")
-
         c1, c2 = st.columns(2)
         with c1:
             if stats.get("grade_distribution"):
                 st.markdown("### 📊 Grade Distribution")
-                gdf = pd.DataFrame({
-                    "Grade": list(stats["grade_distribution"].keys()),
-                    "Count": list(stats["grade_distribution"].values())
-                })
-                fig = px.pie(gdf, values="Count", names="Grade", hole=0.4,
-                            color_discrete_sequence=px.colors.qualitative.Set3)
-                fig.update_layout(paper_bgcolor="rgba(0,0,0,0)")
-                st.plotly_chart(fig, use_container_width=True)
-
+                gdf = pd.DataFrame({"Grade": list(stats["grade_distribution"].keys()),
+                                    "Count": list(stats["grade_distribution"].values())})
+                st.plotly_chart(px.pie(gdf, values="Count", names="Grade", hole=0.4),
+                              use_container_width=True)
         with c2:
             if stats.get("top_performers"):
                 st.markdown("### 🏆 Top Performers")
                 for i, s in enumerate(stats["top_performers"][:5], 1):
                     medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "  "
                     st.markdown(f"{medal} **{s['name']}** — {s['average']:.1f}% ({s['grade']})")
-
-        # Recent notifications
-        notif_resp = api_get("/notifications", params={"limit": 5})
-        notif_data = handle_response(notif_resp, show_error=False) if notif_resp else None
-        if notif_data and notif_data.get("count", 0) > 0:
-            st.markdown("---")
-            st.markdown("### 🔔 Recent Notifications")
-            for n in notif_data["notifications"]:
-                icon = {"Achievement": "🏆", "Warning": "⚠️", "Success": "✅", "Info": "ℹ️"}.get(n["type"], "📌")
-                st.markdown(f"{icon} **{n['type']}** — {n['message']}")
     else:
-        st.info("👋 Welcome! Get started by adding students or importing data.")
-        if user_role in ["admin", "teacher"]:
-            st.markdown("""
-            **Quick Start:**
-            1. 📝 Go to **Analyze** to add student marks
-            2. 📤 Use **Import/Export** for bulk data
-            3. 📊 View **Analytics** for insights
-            4. 👥 Manage users in **Users** (admin only)
-            """)
+        st.info(f"👋 {t('welcome')}! Get started by adding students.")
+
 
 # ============================================================
 # PAGE: ANALYZE
 # ============================================================
-elif selected == "📝 Analyze":
-    st.markdown("""
-        <div class="main-header">
-            <h1>📝 Analyze Student Performance</h1>
-            <p>Enter marks and get AI-powered insights</p>
-        </div>
-    """, unsafe_allow_html=True)
+elif selected == t("analyze"):
+    st.markdown(f'<div class="main-header"><h1>{t("analyze")}</h1><p>Enter marks and get insights</p></div>', unsafe_allow_html=True)
 
     col1, col2 = st.columns([2, 1])
-
     with col1:
         student_name = st.text_input("👤 Student Name *", placeholder="John Doe", key="an_name")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: semester = st.selectbox("Semester", ["Fall 2024", "Spring 2024", "Summer 2024"], key="an_sem")
+        with c2: batch_year = st.selectbox("Batch Year", ["2024", "2023", "2022", "2021"], key="an_year")
+        with c3: department = st.selectbox("Department", ["Computer Science", "Mathematics", "Physics", "Chemistry", "Biology"], key="an_dept")
+        with c4: class_name = st.text_input("Class (optional)", placeholder="CS-A", key="an_class")
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            semester = st.selectbox("Semester", ["Fall 2024", "Spring 2024", "Summer 2024", "Fall 2023"], key="an_sem")
-        with c2:
-            batch_year = st.selectbox("Batch Year", ["2024", "2023", "2022", "2021", "2020"], key="an_year")
-        with c3:
-            department = st.selectbox("Department", [
-                "Computer Science", "Mathematics", "Physics", "Chemistry",
-                "Biology", "Engineering", "Business"
-            ], key="an_dept")
-
-        st.markdown("### 📚 Subject Details")
-        st.caption("⚠️ Subject names must be meaningful (e.g., 'Mathematics', 'Physics 101')")
         num_subjects = st.slider("Number of Subjects", 1, 15, 5, key="an_num")
-
-        marks = []
-        subject_names = []
+        marks, subject_names = [], []
         cols = st.columns(3)
         for i in range(num_subjects):
             with cols[i % 3]:
-                subj = st.text_input(f"Subject {i+1}", placeholder=f"e.g., Mathematics",
-                                     key=f"an_subj_{i}", label_visibility="collapsed")
-                mark = st.number_input(f"Marks {i+1}", 0, 100, 0, 1,
-                                      key=f"an_mark_{i}", label_visibility="collapsed")
+                subj = st.text_input(f"Subject {i+1}", key=f"an_subj_{i}", label_visibility="collapsed")
+                mark = st.number_input(f"Marks {i+1}", 0, 100, 0, 1, key=f"an_mark_{i}", label_visibility="collapsed")
                 marks.append(mark)
                 subject_names.append(subj or f"Subject {i+1}")
 
@@ -979,799 +897,1633 @@ elif selected == "📝 Analyze":
         st.markdown("### ⚙️ Settings")
         passing = st.slider("Passing Threshold", 0, 60, 40, 5, key="an_pass")
         scheme = st.selectbox("Grade Scheme", ["standard", "strict", "lenient"], key="an_scheme")
-
-        st.markdown("---")
-        st.markdown("### 📊 Quick Stats")
         if sum(marks) > 0:
-            avg = sum(marks) / len(marks)
-            st.metric("Total", f"{sum(marks):.0f}")
-            st.metric("Average", f"{avg:.1f}%")
+            st.metric("Average", f"{sum(marks)/len(marks):.1f}%")
 
     if st.button("🚀 Analyze Performance", type="primary", use_container_width=True):
-        if sum(marks) == 0:
-            st.warning("⚠️ Please enter marks")
-        elif not student_name:
-            st.warning("⚠️ Please enter student name")
+        if sum(marks) == 0 or not student_name:
+            st.warning("Fill name and marks")
         else:
-            with st.spinner("Analyzing..."):
-                payload = {
-                    "marks": marks,
-                    "student_name": student_name,
-                    "subject_names": subject_names,
-                    "passing_threshold": passing,
-                    "grade_scheme": scheme,
-                    "semester": semester,
-                    "batch_year": batch_year,
-                    "department": department
-                }
-                resp = api_post("/analyze", json=payload)
-                data = handle_response(resp) if resp else None
-                if data:
-                    st.session_state.analyze_result = data
-                    st.success("✅ Analysis complete!")
-                    st.balloons()
+            payload = {"marks": marks, "student_name": student_name, "subject_names": subject_names,
+                       "passing_threshold": passing, "grade_scheme": scheme,
+                       "semester": semester, "batch_year": batch_year, "department": department,
+                       "class_name": class_name or None}
+            resp = api_post("/analyze", json=payload)
+            data = handle_response(resp) if resp else None
+            if data:
+                st.session_state.analyze_result = data
+                st.success("Analysis complete!")
+                st.balloons()
 
-    # Display result
     if st.session_state.analyze_result:
-        result = st.session_state.analyze_result
+        res = st.session_state.analyze_result
         st.markdown("---")
-
-        grade_color = {
-            "A+": "#10b981", "A": "#34d399", "B": "#fbbf24",
-            "C": "#f59e0b", "D": "#f97316", "E": "#ef4444", "F": "#dc2626"
-        }.get(result["grade"], "#667eea")
-
+        gc = {"A+": "#10b981", "A": "#34d399", "B": "#fbbf24", "C": "#f59e0b", "D": "#f97316", "E": "#ef4444", "F": "#dc2626"}.get(res["grade"], "#667eea")
         st.markdown(f"""
             <div style="text-align: center; padding: 1rem 0;">
                 <h2>Overall Grade</h2>
                 <div style="font-size: 3rem; font-weight: 700; padding: 1.5rem 3rem;
                             border-radius: 100px; display: inline-block;
-                            background: linear-gradient(135deg, {grade_color}, {grade_color}dd);
-                            color: white; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
-                    {result['grade']} <span style="font-size: 1.5rem;">(GPA: {result['grade_points']})</span>
+                            background: linear-gradient(135deg, {gc}, {gc}dd); color: white;">
+                    {res['grade']} <span style="font-size: 1.5rem;">(GPA: {res['grade_points']})</span>
                 </div>
             </div>
         """, unsafe_allow_html=True)
 
         c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            render_metric("📊", f"{result['average']:.1f}%", "Average")
-        with c2:
-            render_metric("📈", f"{result['total_marks']:.0f}", "Total")
-        with c3:
-            render_metric("🏆", f"{result['highest']:.0f}", "Highest")
-        with c4:
-            render_metric("✅", f"{result['pass_percentage']:.0f}%", "Pass Rate")
+        with c1: render_metric("📊", f"{res['average']:.1f}%", "Average")
+        with c2: render_metric("📈", f"{res['total_marks']:.0f}", "Total")
+        with c3: render_metric("🏆", f"{res['highest']:.0f}", "Highest")
+        with c4: render_metric("✅", f"{res['pass_percentage']:.0f}%", "Pass Rate")
 
-        st.markdown("### 📚 Subject-wise Performance")
-        df = pd.DataFrame(result["subject_wise"])
+        df = pd.DataFrame(res["subject_wise"])
         fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=df["subject"], y=df["marks"],
-            marker_color=df["marks"].apply(lambda x: "#10b981" if x >= passing else "#ef4444"),
-            text=df["marks"], textposition="outside"
-        ))
-        fig.add_hline(y=passing, line_dash="dash", line_color="#f59e0b")
-        fig.update_layout(yaxis_range=[0, 105], showlegend=False,
-                         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+        fig.add_trace(go.Bar(x=df["subject"], y=df["marks"],
+                             marker_color=["#10b981" if m >= passing else "#ef4444" for m in df["marks"]],
+                             text=df["marks"], textposition="outside"))
+        fig.update_layout(yaxis_range=[0, 105], showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
 
-        if "ai_insights" in result:
-            st.markdown("### 🤖 AI Insights")
-            t1, t2, t3 = st.tabs(["💪 Strengths", "📈 Recommendations", "🎯 Tips"])
-            with t1:
-                for s in result["ai_insights"]["strengths"]:
-                    st.success(f"**{s['subject']}**: {s['marks']} - {s['level']}")
-                if not result["ai_insights"]["strengths"]:
-                    st.info("No strengths identified")
-            with t2:
-                for r in result["ai_insights"]["recommendations"]:
-                    st.info(f"**{r['action']}**: {r['details']}")
-            with t3:
-                for t in result["ai_insights"]["study_tips"]:
-                    st.info(f"📌 {t}")
-
         st.markdown("### 💡 Recommendations")
-        for rec in result["recommendations"]:
+        for rec in res["recommendations"]:
             st.markdown(f'<div class="recommendation-card">{rec}</div>', unsafe_allow_html=True)
 
         if st.button("💾 Save Student Record", type="primary", use_container_width=True):
-            save_data = {
-                "name": result["student_name"],
-                "marks": marks,
-                "subjects": subject_names,
-                "grade": result["grade"],
-                "average": result["average"],
-                "total_marks": result["total_marks"],
-                "timestamp": datetime.now().isoformat(),
-                "semester": semester,
-                "batch_year": batch_year,
-                "department": department
-            }
-            resp = api_post("/students/save", json=save_data)
-            if resp and resp.status_code == 200:
-                st.success("✅ Record saved!")
+            save_data = {"name": res["student_name"], "marks": marks, "subjects": subject_names,
+                         "grade": res["grade"], "average": res["average"],
+                         "total_marks": res["total_marks"], "timestamp": datetime.now().isoformat(),
+                         "semester": semester, "batch_year": batch_year, "department": department,
+                         "class_name": class_name or None}
+            r = api_post("/students/save", json=save_data)
+            if r and r.status_code == 200:
+                st.success("Saved!")
                 st.balloons()
+
 
 # ============================================================
 # PAGE: DATABASE
 # ============================================================
-elif selected == "📚 Database":
-    st.markdown("""
-        <div class="main-header">
-            <h1>📚 Student Database</h1>
-            <p>View and manage student records</p>
-        </div>
-    """, unsafe_allow_html=True)
+elif selected == t("database"):
+    st.markdown(f'<div class="main-header"><h1>{t("database")}</h1><p>Manage students</p></div>', unsafe_allow_html=True)
 
-    resp = api_get("/students", params={"limit": 100})
-    data = handle_response(resp) if resp else None
+    resp = api_get("/students", params={"limit": 500})
+    data = handle_response(resp, show_error=False) if resp else None
 
     if data and data["count"] > 0:
-        st.success(f"📊 Total: {data['count']} students")
+        st.success(f"Total: {data['count']} students")
 
         df = pd.DataFrame(data["students"])
-        display_df = df.copy()
-        if 'marks' in display_df.columns:
-            display_df['marks'] = display_df['marks'].apply(
-                lambda x: ', '.join(map(str, x)) if isinstance(x, list) else x
-            )
-        if 'subjects' in display_df.columns:
-            display_df['subjects'] = display_df['subjects'].apply(
-                lambda x: ', '.join(x) if isinstance(x, list) else x
-            )
+        df["select"] = False
+        display_cols = ["select", "id", "name", "grade", "average", "class_name", "department"]
+        available = [c for c in display_cols if c in df.columns]
 
-        st.dataframe(display_df, use_container_width=True)
+        edited = st.data_editor(
+            df[available],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "select": st.column_config.CheckboxColumn("✓", default=False),
+            },
+            key="db_editor",
+        )
+
+        selected_ids = edited[edited["select"] == True]["id"].tolist()
+
+        if selected_ids:
+            st.info(f"**{len(selected_ids)} selected**")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button(f"🗑️ Delete {len(selected_ids)} students", type="secondary", use_container_width=True):
+                    r = api_post("/students/bulk-delete", json={"student_ids": selected_ids})
+                    if r and r.status_code == 200:
+                        st.success(r.json()["message"])
+                        time.sleep(0.5)
+                        st.rerun()
+            with c2:
+                if st.button(f"📢 Send notification to {len(selected_ids)}", use_container_width=True):
+                    st.session_state.show_bulk_notif = True
+
+            if st.session_state.get("show_bulk_notif"):
+                with st.form("bulk_notif_form"):
+                    msg = st.text_input("Notification message")
+                    ntype = st.selectbox("Type", ["Info", "Warning", "Achievement"])
+                    if st.form_submit_button("Send"):
+                        r = api_post("/notifications/bulk-send",
+                                     json={"student_ids": selected_ids,
+                                           "message": msg, "type": ntype})
+                        if r and r.status_code == 200:
+                            st.success(r.json()["message"])
+                            st.session_state.show_bulk_notif = False
 
         st.markdown("### 📄 Generate Report Card")
-        opts = {f"{s['name']} (ID: {s['id']})": s['id'] for s in data["students"]}
-        c1, c2 = st.columns([3, 1])
-        with c1:
-            sel = st.selectbox("Student", list(opts.keys()), key="pdf_sel")
+        opts = {f"{s['name']} (ID: {s['id']})": s["id"] for s in data["students"]}
+        c1, c2, c3 = st.columns([3, 1, 1])
+        with c1: sel = st.selectbox("Student", list(opts.keys()), key="pdf_sel")
         with c2:
-            if st.button("📄 PDF", use_container_width=True):
+            pdf_template = st.selectbox("Template", ["classic", "modern", "minimal"], key="pdf_tpl")
+        with c3:
+            if st.button("📄 Generate", use_container_width=True):
                 sid = opts[sel]
-                resp = api_get(f"/students/{sid}/report-card")
-                if resp and resp.status_code == 200:
-                    st.download_button("💾 Download", data=resp.content,
-                                      file_name=f"report_{sid}.pdf", mime="application/pdf")
+                endpoint = (f"/students/{sid}/report-card"
+                            if pdf_template == "classic"
+                            else f"/students/{sid}/report-card/{pdf_template}")
+                r = api_get(endpoint)
+                if r and r.status_code == 200:
+                    st.download_button("💾 Download", data=r.content,
+                                      file_name=f"report_{sid}_{pdf_template}.pdf",
+                                      mime="application/pdf")
     else:
-        st.info("📋 No students in database")
+        st.info("No students yet")
+
 
 # ============================================================
 # PAGE: ANALYTICS
 # ============================================================
-elif selected == "📊 Analytics":
-    st.markdown("""
-        <div class="main-header">
-            <h1>📊 Analytics Dashboard</h1>
-            <p>Comprehensive insights</p>
-        </div>
-    """, unsafe_allow_html=True)
+elif selected == t("analytics"):
+    st.markdown(f'<div class="main-header"><h1>{t("analytics")}</h1></div>', unsafe_allow_html=True)
 
     resp = api_get("/analytics/dashboard")
-    data = handle_response(resp) if resp else None
+    data = handle_response(resp, show_error=False) if resp else None
 
     if data and data.get("has_data"):
         c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            render_metric("👥", data["total_students"], "Students")
-        with c2:
-            render_metric("📈", f"{data['overall_average']:.1f}", "Average")
-        with c3:
-            render_metric("✅", f"{data['pass_rate']:.1f}%", "Pass Rate")
-        with c4:
-            render_metric("🏆", f"{data['distinction_rate']:.1f}%", "Distinction")
-
+        with c1: render_metric("👥", data["total_students"], "Students")
+        with c2: render_metric("📈", f"{data['overall_average']:.1f}", "Average")
+        with c3: render_metric("✅", f"{data['pass_rate']:.1f}%", "Pass Rate")
+        with c4: render_metric("🏆", f"{data['distinction_rate']:.1f}%", "Distinction")
         st.markdown("---")
         c1, c2 = st.columns(2)
-
         with c1:
             if data.get("grade_distribution"):
-                st.markdown("### 📊 Grades")
-                gdf = pd.DataFrame({
-                    "Grade": list(data["grade_distribution"].keys()),
-                    "Count": list(data["grade_distribution"].values())
-                })
-                fig = px.pie(gdf, values="Count", names="Grade", hole=0.4)
-                st.plotly_chart(fig, use_container_width=True)
-
+                gdf = pd.DataFrame({"Grade": list(data["grade_distribution"].keys()),
+                                    "Count": list(data["grade_distribution"].values())})
+                st.plotly_chart(px.pie(gdf, values="Count", names="Grade", hole=0.4),
+                              use_container_width=True)
         with c2:
             if data.get("grade_ranges"):
-                st.markdown("### 📊 Ranges")
-                rdf = pd.DataFrame({
-                    "Range": list(data["grade_ranges"].keys()),
-                    "Count": list(data["grade_ranges"].values())
-                })
-                fig = px.bar(rdf, x="Range", y="Count", color="Count", color_continuous_scale="Viridis")
-                st.plotly_chart(fig, use_container_width=True)
-
+                rdf = pd.DataFrame({"Range": list(data["grade_ranges"].keys()),
+                                    "Count": list(data["grade_ranges"].values())})
+                st.plotly_chart(px.bar(rdf, x="Range", y="Count", color="Count",
+                                       color_continuous_scale="Viridis"), use_container_width=True)
         if data.get("subject_analytics"):
-            st.markdown("### 📚 Subject Performance")
             subj_df = pd.DataFrame(data["subject_analytics"])
-            fig = px.bar(subj_df, x="subject", y="average", color="average",
-                        color_continuous_scale="RdYlGn", text="average")
-            fig.update_traces(texttemplate='%{text:.1f}', textposition='outside')
-            fig.update_layout(yaxis_range=[0, 105], showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
-
+            st.plotly_chart(px.bar(subj_df, x="subject", y="average", color="average",
+                                   color_continuous_scale="RdYlGn"), use_container_width=True)
         if data.get("top_performers"):
             st.markdown("### 🏆 Top Performers")
             st.dataframe(pd.DataFrame(data["top_performers"]), use_container_width=True)
     else:
-        st.info("📊 No data available. Add students first.")
+        st.info("No data yet")
+
 
 # ============================================================
-# PAGE: REPORTS
+# PAGE: REPORTS (Export)
 # ============================================================
-elif selected == "📈 Reports":
-    st.markdown("""
-        <div class="main-header">
-            <h1>📈 Reports & Export</h1>
-            <p>Download your data</p>
-        </div>
-    """, unsafe_allow_html=True)
+elif selected == t("reports"):
+    st.markdown(f'<div class="main-header"><h1>{t("reports")}</h1><p>Export data</p></div>', unsafe_allow_html=True)
 
-    c1, c2 = st.columns(2)
-
+    c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("📊 Export CSV", use_container_width=True):
-            resp = api_get("/export/csv")
-            if resp and resp.status_code == 200:
-                st.download_button(
-                    "💾 Download CSV",
-                    data=resp.content,
-                    file_name=f"students_{datetime.now().strftime('%Y%m%d')}.csv",
-                    mime="text/csv"
-                )
-
+            r = api_get("/export/csv")
+            if r and r.status_code == 200:
+                st.download_button("💾 Download CSV", data=r.content,
+                                  file_name=f"students_{datetime.now().strftime('%Y%m%d')}.csv",
+                                  mime="text/csv")
     with c2:
         if st.button("📋 Export JSON", use_container_width=True):
-            resp = api_get("/export/json")
-            if resp and resp.status_code == 200:
-                st.download_button(
-                    "💾 Download JSON",
-                    data=json.dumps(resp.json(), indent=2),
-                    file_name=f"students_{datetime.now().strftime('%Y%m%d')}.json",
-                    mime="application/json"
-                )
+            r = api_get("/export/json")
+            if r and r.status_code == 200:
+                st.download_button("💾 Download JSON", data=json.dumps(r.json(), indent=2),
+                                  file_name=f"students_{datetime.now().strftime('%Y%m%d')}.json",
+                                  mime="application/json")
+    with c3:
+        if st.button("📈 Export Excel", use_container_width=True):
+            r = api_get("/export/excel")
+            if r and r.status_code == 200:
+                st.download_button("💾 Download .xlsx", data=r.content,
+                                  file_name=f"students_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                                  mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    st.markdown("---")
-    st.markdown("### 📊 Statistics Summary")
-    resp = api_get("/stats/overall")
-    stats = handle_response(resp) if resp else None
-    if stats and "total_students" in stats:
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("Students", stats["total_students"])
-        with c2:
-            st.metric("Avg Score", f"{stats['average_of_averages']:.2f}")
-        with c3:
-            st.metric("Pass Rate", f"{stats['pass_rate']:.1f}%")
-        with c4:
-            st.metric("Distinction", f"{stats['distinction_rate']:.1f}%")
 
 # ============================================================
 # PAGE: ATTENDANCE
 # ============================================================
-elif selected == "📅 Attendance" or selected == "📅 My Attendance":
-    st.markdown("""
-        <div class="main-header">
-            <h1>📅 Attendance</h1>
-            <p>Track and view attendance</p>
-        </div>
-    """, unsafe_allow_html=True)
+elif selected == t("attendance") or selected == "📅 My Attendance":
+    st.markdown(f'<div class="main-header"><h1>{t("attendance")}</h1></div>', unsafe_allow_html=True)
 
     if user_role in ["admin", "teacher"]:
-        tab1, tab2, tab3 = st.tabs(["📝 Record", "📊 Stats", "🏫 Overall"])
+        tab1, tab2, tab3 = st.tabs(["📝 Single", "📋 Bulk", "📊 Overall"])
 
         with tab1:
-            resp = api_get("/students", params={"limit": 500})
-            data = handle_response(resp, show_error=False) if resp else None
+            r = api_get("/students", params={"limit": 500})
+            data = handle_response(r, show_error=False) if r else None
             students = data.get("students", []) if data else []
 
             if students:
                 c1, c2 = st.columns(2)
-                with c1:
-                    att_date = st.date_input("Date", datetime.now(), key="att_d")
-                with c2:
-                    att_subject = st.text_input("Subject (optional)", key="att_s")
-
-                opts = {f"{s['name']} (ID: {s['id']})": s['id'] for s in students}
-                sel = st.selectbox("Student", list(opts.keys()), key="att_sel")
-
-                c1, c2 = st.columns(2)
-                with c1:
-                    status = st.selectbox("Status", ["Present", "Absent", "Late", "Excused"], key="att_stat")
-                with c2:
-                    notes = st.text_input("Notes", key="att_note")
-
+                with c1: d = st.date_input("Date", datetime.now())
+                with c2: s = st.text_input("Subject (optional)")
+                opts = {f"{x['name']}": x["id"] for x in students}
+                sel = st.selectbox("Student", list(opts.keys()))
+                status = st.selectbox("Status", ["Present", "Absent", "Late", "Excused"])
                 if st.button("📝 Record", type="primary", use_container_width=True):
-                    payload = {
-                        "student_id": opts[sel],
-                        "date": att_date.isoformat(),
-                        "status": status,
-                        "subject": att_subject or None,
-                        "notes": notes or None
-                    }
-                    resp = api_post("/attendance", json=payload)
-                    if resp and resp.status_code == 200:
-                        st.success("✅ Recorded!")
-                        st.balloons()
-            else:
-                st.info("No students available")
+                    r = api_post("/attendance", json={"student_id": opts[sel],
+                                                      "date": d.isoformat(),
+                                                      "status": status, "subject": s or None})
+                    if r and r.status_code == 200:
+                        st.success("Recorded!")
 
         with tab2:
-            resp = api_get("/students", params={"limit": 500})
-            data = handle_response(resp, show_error=False) if resp else None
+            r = api_get("/students", params={"limit": 500})
+            data = handle_response(r, show_error=False) if r else None
             students = data.get("students", []) if data else []
 
             if students:
-                opts = {f"{s['name']} (ID: {s['id']})": s['id'] for s in students}
-                sel = st.selectbox("Student", list(opts.keys()), key="stats_sel")
-
-                if st.button("📊 Load Stats", key="stats_btn"):
-                    sid = opts[sel]
-                    resp = api_get(f"/attendance/{sid}/stats")
-                    stats = handle_response(resp) if resp else None
-                    if stats:
-                        c1, c2, c3, c4 = st.columns(4)
-                        with c1:
-                            st.metric("Total", stats.get("total_days", 0))
-                        with c2:
-                            st.metric("Present", stats.get("present", 0))
-                        with c3:
-                            st.metric("Absent", stats.get("absent", 0))
-                        with c4:
-                            st.metric("Rate", f"{stats.get('attendance_rate', 0):.1f}%")
-
-                        if stats.get("total_days", 0) > 0:
-                            st.progress(stats["attendance_rate"] / 100)
+                c1, c2 = st.columns(2)
+                with c1: bd = st.date_input("Date", datetime.now(), key="bulk_d")
+                with c2: bs = st.text_input("Subject", key="bulk_s")
+                classes = list(set(s.get("class_name") for s in students if s.get("class_name")))
+                class_filter = st.selectbox("Filter by class", ["All"] + classes)
+                filtered = students if class_filter == "All" else [s for s in students if s.get("class_name") == class_filter]
+                st.caption(f"{len(filtered)} students")
+                selected_bulk = st.multiselect("Select students", [f"{s['name']} (ID {s['id']})" for s in filtered])
+                bstatus = st.selectbox("Status", ["Present", "Absent", "Late", "Excused"], key="bulk_status")
+                if st.button("📋 Record Bulk", type="primary", use_container_width=True):
+                    if selected_bulk:
+                        ids = [int(x.split("ID ")[1].rstrip(")")) for x in selected_bulk]
+                        r = api_post("/attendance/bulk", json={
+                            "student_ids": ids, "date": bd.isoformat(),
+                            "status": bstatus, "subject": bs or None,
+                        })
+                        if r and r.status_code == 200:
+                            st.success(r.json()["message"])
+                            st.balloons()
 
         with tab3:
-            if st.button("📊 Overall Stats"):
-                resp = api_get("/attendance/stats/overall")
-                data = handle_response(resp) if resp else None
-                if data and data.get("total_records", 0) > 0:
-                    c1, c2, c3, c4 = st.columns(4)
-                    with c1:
-                        st.metric("Records", data["total_records"])
-                    with c2:
-                        st.metric("Present", data["present"])
-                    with c3:
-                        st.metric("Absent", data["absent"])
-                    with c4:
-                        st.metric("Rate", f"{data['overall_rate']:.1f}%")
+            r = api_get("/attendance/stats/overall")
+            data = handle_response(r, show_error=False) if r else None
+            if data and data.get("total_records", 0) > 0:
+                c1, c2, c3, c4 = st.columns(4)
+                with c1: st.metric("Records", data["total_records"])
+                with c2: st.metric("Present", data["present"])
+                with c3: st.metric("Absent", data["absent"])
+                with c4: st.metric("Rate", f"{data['overall_rate']:.1f}%")
     else:
-        st.info("Viewing your attendance summary")
-        resp = api_get("/attendance/stats/overall")
-        data = handle_response(resp) if resp else None
-        if data:
-            st.metric("Overall Rate", f"{data.get('overall_rate', 0):.1f}%")
+        st.info("Your attendance summary")
+
 
 # ============================================================
-# PAGE: NOTIFICATIONS
+# PAGE: EXAMS
 # ============================================================
-elif selected == "🔔 Notifications":
-    st.markdown("""
-        <div class="main-header">
-            <h1>🔔 Notifications</h1>
-            <p>Your alerts and updates</p>
-        </div>
-    """, unsafe_allow_html=True)
+elif selected == t("exams"):
+    st.markdown(f'<div class="main-header"><h1>{t("exams")}</h1><p>Manage exam schedules</p></div>', unsafe_allow_html=True)
+
+    tab1, tab2 = st.tabs(["📋 All Exams", "➕ Create"])
+
+    with tab1:
+        r = api_get("/exams")
+        data = handle_response(r, show_error=False) if r else None
+        exams = data.get("exams", []) if data else []
+
+        if exams:
+            st.metric("Total Exams", len(exams))
+
+            # Class filter
+            classes = list(set(e.get("class_name") for e in exams if e.get("class_name")))
+            if classes:
+                class_filter = st.selectbox("Filter by class", ["All"] + classes)
+                if class_filter != "All":
+                    exams = [e for e in exams if e.get("class_name") == class_filter]
+
+            df = pd.DataFrame(exams)
+            if not df.empty:
+                display_cols = ["id", "name", "class_name", "subject", "exam_date", "start_time", "total_marks"]
+                available = [c for c in display_cols if c in df.columns]
+                st.dataframe(df[available], use_container_width=True)
+
+            # Delete
+            if user_role in ["admin", "teacher"]:
+                st.markdown("### 🗑️ Delete Exam")
+                exam_opts = {f"{e['name']} ({e['exam_date']})": e["id"] for e in exams}
+                if exam_opts:
+                    sel_exam = st.selectbox("Select exam to delete", list(exam_opts.keys()))
+                    if st.button("🗑️ Delete", type="secondary"):
+                        r = api_delete(f"/exams/{exam_opts[sel_exam]}")
+                        if r and r.status_code == 200:
+                            st.success("Deleted!")
+                            time.sleep(0.5)
+                            st.rerun()
+        else:
+            st.info("No exams yet. Create one in the next tab.")
+
+    with tab2:
+        if user_role in ["admin", "teacher"]:
+            st.markdown("### Create Exam")
+            with st.form("create_exam"):
+                en = st.text_input("Exam Name *", placeholder="Mid-Term 2024")
+                c1, c2 = st.columns(2)
+                with c1:
+                    ec = st.text_input("Class", placeholder="CS-A")
+                    es = st.text_input("Subject", placeholder="Mathematics")
+                with c2:
+                    ed = st.date_input("Exam Date")
+                    er = st.text_input("Room", placeholder="Room 101")
+
+                c1, c2, c3 = st.columns(3)
+                with c1: est = st.text_input("Start Time", placeholder="09:00")
+                with c2: eet = st.text_input("End Time", placeholder="11:00")
+                with c3: etm = st.number_input("Total Marks", 0, 500, 100)
+
+                enotes = st.text_area("Notes")
+
+                if st.form_submit_button("➕ Create Exam", type="primary"):
+                    if not en:
+                        st.warning("Enter exam name")
+                    else:
+                        payload = {
+                            "name": en,
+                            "class_name": ec or None,
+                            "subject": es or None,
+                            "exam_date": ed.isoformat(),
+                            "start_time": est or None,
+                            "end_time": eet or None,
+                            "total_marks": etm,
+                            "room": er or None,
+                            "notes": enotes or None,
+                        }
+                        r = api_post("/exams/create", json=payload)
+                        if r and r.status_code == 200:
+                            st.success("Exam created!")
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error(r.json().get("detail", "Failed"))
+        else:
+            st.info("Only admins and teachers can create exams")
+
+
+# ============================================================
+# PAGE: TIMETABLE
+# ============================================================
+elif selected == t("timetable"):
+    st.markdown(f'<div class="main-header"><h1>{t("timetable")}</h1><p>Weekly class schedule</p></div>', unsafe_allow_html=True)
+
+    tab1, tab2 = st.tabs(["📋 View Timetable", "➕ Add Entry"])
+
+    with tab1:
+        r = api_get("/timetable")
+        data = handle_response(r, show_error=False) if r else None
+        entries = data.get("timetable", []) if data else []
+
+        if entries:
+            # Get unique classes
+            classes = list(set(e["class_name"] for e in entries))
+            selected_class = st.selectbox("Select class", classes)
+
+            filtered = [e for e in entries if e["class_name"] == selected_class]
+
+            # Group by day
+            days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+            df = pd.DataFrame(filtered)
+
+            st.markdown(f"### 📅 Timetable for {selected_class}")
+
+            # Pivot table
+            if not df.empty:
+                df_pivot = df.pivot_table(
+                    index="day_of_week",
+                    columns="period",
+                    values="subject",
+                    aggfunc="first"
+                )
+                df_pivot = df_pivot.reindex(days)
+                st.dataframe(df_pivot, use_container_width=True)
+
+                # Full details
+                with st.expander("📋 Full Details"):
+                    display_cols = ["day_of_week", "period", "subject", "teacher_name", "room", "start_time", "end_time"]
+                    available = [c for c in display_cols if c in df.columns]
+                    st.dataframe(df[available], use_container_width=True)
+        else:
+            st.info("No timetable entries yet")
+
+    with tab2:
+        if user_role in ["admin", "teacher"]:
+            st.markdown("### Add Timetable Entry")
+            with st.form("create_tt"):
+                c1, c2 = st.columns(2)
+                with c1:
+                    tcn = st.text_input("Class Name *", placeholder="CS-A")
+                    tdow = st.selectbox("Day", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"])
+                    tsub = st.text_input("Subject *", placeholder="Mathematics")
+                with c2:
+                    tper = st.number_input("Period", 1, 10, 1)
+                    tteacher = st.text_input("Teacher Name", placeholder="Mr. Smith")
+                    troom = st.text_input("Room", placeholder="Room 101")
+
+                c1, c2 = st.columns(2)
+                with c1: tstart = st.text_input("Start Time", placeholder="09:00")
+                with c2: tend = st.text_input("End Time", placeholder="10:00")
+
+                if st.form_submit_button("➕ Add Entry", type="primary"):
+                    if not tcn or not tsub:
+                        st.warning("Enter class and subject")
+                    else:
+                        payload = {
+                            "class_name": tcn,
+                            "day_of_week": tdow,
+                            "period": tper,
+                            "subject": tsub,
+                            "teacher_name": tteacher or None,
+                            "room": troom or None,
+                            "start_time": tstart or None,
+                            "end_time": tend or None,
+                        }
+                        r = api_post("/timetable/create", json=payload)
+                        if r and r.status_code == 200:
+                            st.success("Added!")
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error(r.json().get("detail", "Failed"))
+        else:
+            st.info("Only admins and teachers can add timetable entries")
+
+
+# ============================================================
+# PAGE: ASSIGNMENTS
+# ============================================================
+elif selected == t("assignments"):
+    st.markdown(f'<div class="main-header"><h1>{t("assignments")}</h1><p>Track assignments and submissions</p></div>', unsafe_allow_html=True)
+
+    tab1, tab2 = st.tabs(["📋 All Assignments", "➕ Create"])
+
+    with tab1:
+        r = api_get("/assignments")
+        data = handle_response(r, show_error=False) if r else None
+        assignments = data.get("assignments", []) if data else []
+
+        if assignments:
+            st.metric("Total Assignments", len(assignments))
+
+            for a in assignments:
+                with st.expander(f"📝 {a['title']} — Due: {a['due_date'][:10]}"):
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        st.markdown(f"**Class:** {a.get('class_name', 'N/A')}")
+                        st.markdown(f"**Subject:** {a.get('subject', 'N/A')}")
+                    with c2:
+                        st.markdown(f"**Total Marks:** {a.get('total_marks', 100)}")
+                        st.markdown(f"**Due Date:** {a.get('due_date', 'N/A')}")
+                    with c3:
+                        stats = a.get("stats", {})
+                        st.markdown(f"**Submitted:** {stats.get('submitted', 0)}/{stats.get('total', 0)}")
+                        st.markdown(f"**Graded:** {stats.get('graded', 0)}")
+
+                    if a.get("description"):
+                        st.markdown(f"**Description:** {a['description']}")
+
+                    if user_role in ["admin", "teacher"]:
+                        if st.button(f"👥 View Submissions", key=f"sub_{a['id']}"):
+                            r = api_get(f"/assignments/{a['id']}/submissions")
+                            subs = handle_response(r, show_error=False) if r else None
+                            if subs and subs.get("submissions"):
+                                sub_df = pd.DataFrame(subs["submissions"])
+                                st.dataframe(sub_df, use_container_width=True)
+                            else:
+                                st.info("No submissions found (assign students to a class first)")
+        else:
+            st.info("No assignments yet")
+
+    with tab2:
+        if user_role in ["admin", "teacher"]:
+            st.markdown("### Create Assignment")
+            with st.form("create_assignment"):
+                at = st.text_input("Title *", placeholder="Chapter 5 Homework")
+                ad = st.text_area("Description")
+                c1, c2 = st.columns(2)
+                with c1:
+                    ac = st.text_input("Class", placeholder="CS-A")
+                    asub = st.text_input("Subject", placeholder="Mathematics")
+                with c2:
+                    adue = st.date_input("Due Date")
+                    atm = st.number_input("Total Marks", 0, 500, 100)
+
+                if st.form_submit_button("➕ Create", type="primary"):
+                    if not at:
+                        st.warning("Enter title")
+                    else:
+                        payload = {
+                            "title": at,
+                            "description": ad or None,
+                            "class_name": ac or None,
+                            "subject": asub or None,
+                            "due_date": adue.isoformat(),
+                            "total_marks": atm,
+                        }
+                        r = api_post("/assignments/create", json=payload)
+                        if r and r.status_code == 200:
+                            st.success("Created!")
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error(r.json().get("detail", "Failed"))
+        else:
+            st.info("Only admins and teachers can create assignments")
+# ============================================================
+# PAGE: FEES
+# ============================================================
+elif selected == t("fees"):
+    st.markdown(f'<div class="main-header"><h1>{t("fees")}</h1><p>Fee structure and payments</p></div>', unsafe_allow_html=True)
+
+    tab1, tab2, tab3 = st.tabs(["💵 Payments", "📋 Structure", "➕ Record Payment"])
+
+    with tab1:
+        r = api_get("/fees/payments")
+        data = handle_response(r, show_error=False) if r else None
+
+        if data and data.get("payments"):
+            summary = data.get("summary", {})
+            c1, c2, c3 = st.columns(3)
+            with c1: render_metric("💰", f"₹{summary.get('total_paid', 0):.0f}", "Total Paid")
+            with c2: render_metric("⏳", f"₹{summary.get('total_pending', 0):.0f}", "Pending")
+            with c3: render_metric("📊", summary.get("count", 0), "Total Records")
+
+            st.markdown("---")
+            df = pd.DataFrame(data["payments"])
+            display_cols = ["id", "student_name", "fee_type", "amount", "payment_date", "payment_method", "status"]
+            available = [c for c in display_cols if c in df.columns]
+            st.dataframe(df[available], use_container_width=True)
+        else:
+            st.info("No payments recorded yet")
+
+    with tab2:
+        r = api_get("/fees/structure")
+        data = handle_response(r, show_error=False) if r else None
+        structures = data.get("structures", []) if data else []
+
+        if structures:
+            st.metric("Fee Structures", len(structures))
+            df = pd.DataFrame(structures)
+            st.dataframe(df, use_container_width=True)
+
+            if user_role == "admin":
+                st.markdown("### 🗑️ Delete Structure")
+                opts = {f"{s['class_name']} - {s['fee_type']} (₹{s['amount']})": s["id"] for s in structures}
+                sel = st.selectbox("Select", list(opts.keys()))
+                if st.button("🗑️ Delete", type="secondary"):
+                    r = api_delete(f"/fees/structure/{opts[sel]}")
+                    if r and r.status_code == 200:
+                        st.success("Deleted!")
+                        time.sleep(0.5)
+                        st.rerun()
+        else:
+            st.info("No fee structures yet")
+
+        if user_role == "admin":
+            st.markdown("### ➕ Create Fee Structure")
+            with st.form("create_fee_structure"):
+                c1, c2 = st.columns(2)
+                with c1:
+                    fsc = st.text_input("Class Name *", placeholder="CS-A")
+                    fst = st.text_input("Fee Type *", placeholder="Tuition")
+                with c2:
+                    fsa = st.number_input("Amount (₹) *", 0.0, 100000.0, 5000.0, step=100.0)
+                    fsf = st.selectbox("Frequency", ["monthly", "quarterly", "yearly", "one-time"])
+                fsy = st.text_input("Academic Year", placeholder="2024-25")
+
+                if st.form_submit_button("➕ Create", type="primary"):
+                    if not fsc or not fst:
+                        st.warning("Enter class and fee type")
+                    else:
+                        payload = {
+                            "class_name": fsc, "fee_type": fst,
+                            "amount": fsa, "frequency": fsf,
+                            "academic_year": fsy or None,
+                        }
+                        r = api_post("/fees/structure/create", json=payload)
+                        if r and r.status_code == 200:
+                            st.success("Created!")
+                            st.rerun()
+                        else:
+                            st.error(r.json().get("detail", "Failed"))
+
+    with tab3:
+        if user_role in ["admin", "teacher"]:
+            st.markdown("### Record Payment")
+            r = api_get("/students", params={"limit": 500})
+            data = handle_response(r, show_error=False) if r else None
+            students = data.get("students", []) if data else []
+
+            if students:
+                with st.form("record_payment"):
+                    opts = {f"{s['name']} (ID {s['id']})": s["id"] for s in students}
+                    sel_s = st.selectbox("Student *", list(opts.keys()))
+
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        pf = st.text_input("Fee Type *", placeholder="Tuition")
+                        pa = st.number_input("Amount (₹) *", 0.0, 100000.0, 5000.0, step=100.0)
+                    with c2:
+                        pd = st.date_input("Payment Date")
+                        pm = st.selectbox("Payment Method", ["cash", "card", "upi", "bank_transfer", "cheque"])
+
+                    pstatus = st.selectbox("Status", ["paid", "pending"])
+                    ptid = st.text_input("Transaction ID (optional)")
+                    pnotes = st.text_input("Notes")
+
+                    if st.form_submit_button("💰 Record Payment", type="primary"):
+                        if not pf:
+                            st.warning("Enter fee type")
+                        else:
+                            payload = {
+                                "student_id": opts[sel_s],
+                                "fee_type": pf,
+                                "amount": pa,
+                                "payment_date": pd.isoformat(),
+                                "payment_method": pm,
+                                "status": pstatus,
+                                "transaction_id": ptid or None,
+                                "notes": pnotes or None,
+                            }
+                            r = api_post("/fees/payment/create", json=payload)
+                            if r and r.status_code == 200:
+                                st.success("Payment recorded!")
+                                st.balloons()
+                            else:
+                                st.error(r.json().get("detail", "Failed"))
+        else:
+            st.info("Only admins and teachers can record payments")
+
+
+# ============================================================
+# PAGE: CLASSES
+# ============================================================
+elif selected == t("classes"):
+    st.markdown(f'<div class="main-header"><h1>{t("classes")}</h1><p>Cohort analytics</p></div>', unsafe_allow_html=True)
+
+    tab1, tab2, tab3 = st.tabs(["📊 Analytics", "➕ Create", "👥 Assign"])
+
+    with tab1:
+        r = api_get("/classes/list-names")
+        names_data = handle_response(r, show_error=False) if r else None
+        class_names = names_data.get("names", []) if names_data else []
+
+        if not class_names:
+            st.info("No classes yet")
+        else:
+            selected_class = st.selectbox("Select class", class_names)
+            if st.button("📊 Load Analytics", type="primary"):
+                r = api_get(f"/classes/{selected_class}/analytics")
+                res = handle_response(r, show_error=False) if r else None
+
+                if res and res.get("count", 0) > 0:
+                    c1, c2, c3, c4 = st.columns(4)
+                    with c1: render_metric("👥", res["count"], "Students")
+                    with c2: render_metric("📈", f"{res['average']:.1f}", "Average")
+                    with c3: render_metric("🏆", f"{res['highest']:.1f}", "Highest")
+                    with c4: render_metric("✅", f"{res['pass_rate']:.0f}%", "Pass Rate")
+
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.markdown("### Top 3")
+                        for s in res.get("top_3", []):
+                            st.success(f"🥇 {s['name']} — {s['average']:.1f}%")
+                    with c2:
+                        st.markdown("### Bottom 3")
+                        for s in res.get("bottom_3", []):
+                            st.warning(f"⚠️ {s['name']} — {s['average']:.1f}%")
+
+                    if res.get("grade_distribution"):
+                        gdf = pd.DataFrame({"Grade": list(res["grade_distribution"].keys()),
+                                            "Count": list(res["grade_distribution"].values())})
+                        st.plotly_chart(px.pie(gdf, values="Count", names="Grade", hole=0.4),
+                                      use_container_width=True)
+
+                    if res.get("at_risk"):
+                        st.markdown("### 🚨 At Risk")
+                        st.dataframe(pd.DataFrame(res["at_risk"]), use_container_width=True)
+                else:
+                    st.info(res.get("message", "No data"))
+
+    with tab2:
+        st.markdown("### Create New Class")
+        with st.form("create_class"):
+            cn = st.text_input("Class Name *", placeholder="CS-A")
+            cd = st.text_input("Department (optional)")
+
+            if st.form_submit_button("➕ Create", type="primary"):
+                if not cn:
+                    st.warning("Enter class name")
+                else:
+                    r = api_post("/classes/create", json={"name": cn, "department": cd or None})
+                    if r and r.status_code == 200:
+                        st.success(f"Class '{cn}' created!")
+                        time.sleep(0.5)
+                        st.rerun()
+                    elif r and r.status_code == 400:
+                        detail = r.json().get("detail", "Error")
+                        if "already exists" in detail.lower():
+                            st.warning(f"⚠️ Class '{cn}' already exists")
+                        else:
+                            st.error(f"❌ {detail}")
+
+    with tab3:
+        st.markdown("### Assign Students to Class")
+        r = api_get("/students", params={"limit": 500})
+        data = handle_response(r, show_error=False) if r else None
+        students = data.get("students", []) if data else []
+
+        r2 = api_get("/classes/list-names")
+        names_data = handle_response(r2, show_error=False) if r2 else None
+        class_names = names_data.get("names", []) if names_data else []
+
+        if students and class_names:
+            target_class = st.selectbox("Target class", class_names)
+            sel_students = st.multiselect("Select students",
+                                         [f"{s['name']} (ID {s['id']})" for s in students])
+            if st.button("👥 Assign", type="primary", use_container_width=True):
+                if sel_students:
+                    ids = [int(x.split("ID ")[1].rstrip(")")) for x in sel_students]
+                    r = api_post("/classes/assign",
+                                 json={"student_ids": ids, "class_name": target_class})
+                    if r and r.status_code == 200:
+                        st.success(r.json()["message"])
+        else:
+            st.info("Need both students and classes to assign")
+
+
+# ============================================================
+# PAGE: PARENT LINKS
+# ============================================================
+elif selected == t("parent_links"):
+    st.markdown(f'<div class="main-header"><h1>{t("parent_links")}</h1><p>Link parents to students</p></div>', unsafe_allow_html=True)
+
+    tab1, tab2 = st.tabs(["🔗 Link", "📋 All Links"])
+
+    with tab1:
+        r = api_get("/auth/users")
+        users_data = handle_response(r, show_error=False) if r else None
+        parents = [u for u in users_data["users"] if u["role"] == "parent"] if users_data else []
+
+        r = api_get("/students", params={"limit": 500})
+        students_data = handle_response(r, show_error=False) if r else None
+        students = students_data.get("students", []) if students_data else []
+
+        if not parents:
+            st.warning("No parent accounts. Ask a parent to register first.")
+        elif not students:
+            st.warning("No students yet.")
+        else:
+            with st.form("link_form"):
+                parent_opts = {f"{p['username']} ({p['email']})": p["id"] for p in parents}
+                student_opts = {f"{s['name']} (ID {s['id']})": s["id"] for s in students}
+
+                sel_parent = st.selectbox("Parent", list(parent_opts.keys()))
+                sel_student = st.selectbox("Student", list(student_opts.keys()))
+                rel = st.selectbox("Relationship", ["parent", "guardian", "mother", "father", "other"])
+
+                if st.form_submit_button("🔗 Link", type="primary"):
+                    r = api_post("/parents/link-child", json={
+                        "parent_user_id": parent_opts[sel_parent],
+                        "student_id": student_opts[sel_student],
+                        "relationship": rel,
+                    })
+                    if r and r.status_code == 200:
+                        st.success("Linked!")
+                    else:
+                        st.error(r.json().get("detail", "Failed"))
+
+    with tab2:
+        r = api_get("/parents/all-links")
+        links_data = handle_response(r, show_error=False) if r else None
+        links = links_data.get("links", []) if links_data else []
+
+        if links:
+            st.metric("Total Links", len(links))
+            st.dataframe(pd.DataFrame(links), use_container_width=True)
+
+            st.markdown("### 🔓 Unlink")
+            link_opts = {f"{l['parent_username']} → {l['student_name']}": l["id"] for l in links}
+            sel_link = st.selectbox("Select link", list(link_opts.keys()))
+            if st.button("🗑️ Unlink", type="secondary"):
+                r = api_delete(f"/parents/unlink/{link_opts[sel_link]}")
+                if r and r.status_code == 200:
+                    st.success("Unlinked!")
+                    st.rerun()
+        else:
+            st.info("No links yet")
+
+
+# ============================================================
+# PAGE: STUDENT PROFILE (with photo)
+# ============================================================
+elif selected == t("profile"):
+    st.markdown(f'<div class="main-header"><h1>{t("profile")}</h1><p>Complete student profile with photo</p></div>', unsafe_allow_html=True)
+
+    r = api_get("/students", params={"limit": 500})
+    data = handle_response(r, show_error=False) if r else None
+    students = data.get("students", []) if data else []
+
+    if not students:
+        st.info("No students yet")
+    else:
+        opts = {f"{s['name']} (ID {s['id']})": s["id"] for s in students}
+        sel = st.selectbox("Select student", list(opts.keys()), key="profile_sel")
+        sid = opts[sel]
+
+        if st.button("👁️ Load Profile", type="primary", use_container_width=True):
+            r = api_get(f"/students/{sid}/profile")
+            prof = handle_response(r, show_error=False) if r else None
+
+            if not prof:
+                st.error("Failed to load")
+            else:
+                s = prof["student"]
+
+                # Header with photo
+                c1, c2 = st.columns([1, 3])
+                with c1:
+                    photo_url = get_student_photo_url(s.get("photo_url"))
+                    if photo_url:
+                        try:
+                            st.image(photo_url, width=150)
+                        except Exception:
+                            st.markdown("### 📸")
+                            st.caption("No photo")
+                    else:
+                        st.markdown("### 📸")
+                        st.caption("No photo")
+
+                    # Photo upload
+                    if user_role in ["admin", "teacher"]:
+                        uploaded = st.file_uploader("Upload Photo",
+                                                    type=["jpg", "jpeg", "png", "webp"],
+                                                    key=f"photo_up_{sid}")
+                        if uploaded:
+                            files = {"file": (uploaded.name, uploaded.getvalue(), uploaded.type)}
+                            r = api_post(f"/students/{sid}/photo", files=files)
+                            if r and r.status_code == 200:
+                                st.success("Photo uploaded!")
+                                time.sleep(0.5)
+                                st.rerun()
+                            else:
+                                st.error("Upload failed")
+
+                        if photo_url:
+                            if st.button("🗑️ Delete Photo", key=f"del_photo_{sid}"):
+                                r = api_delete(f"/students/{sid}/photo")
+                                if r and r.status_code == 200:
+                                    st.success("Deleted")
+                                    st.rerun()
+
+                with c2:
+                    st.markdown(f"## {s['name']}")
+                    st.markdown(f"**ID:** {s['id']}  |  **Class:** {s.get('class_name', 'N/A')}  |  **Department:** {s.get('department', 'N/A')}")
+
+                    # Stats
+                    c_a, c_b, c_c, c_d = st.columns(4)
+                    with c_a: st.metric("📊 Average", f"{s['average']:.1f}%")
+                    with c_b: st.metric("🏆 Grade", s["grade"])
+                    with c_c: st.metric("📈 Total", f"{s['total_marks']:.0f}")
+                    with c_d: st.metric("📚 Subjects", len(s.get("subjects", [])))
+
+                st.markdown("---")
+
+                # Edit profile
+                if user_role in ["admin", "teacher"]:
+                    with st.expander("✏️ Edit Profile Details"):
+                        with st.form(f"edit_profile_{sid}"):
+                            em = st.text_input("Email", value=s.get("email") or "")
+                            ph = st.text_input("Phone", value=s.get("phone") or "")
+                            dob = st.text_input("Date of Birth (YYYY-MM-DD)", value=s.get("date_of_birth") or "")
+                            addr = st.text_area("Address", value=s.get("address") or "")
+
+                            if st.form_submit_button("💾 Save"):
+                                payload = {
+                                    "email": em or None,
+                                    "phone": ph or None,
+                                    "date_of_birth": dob or None,
+                                    "address": addr or None,
+                                }
+                                r = api_put(f"/students/{sid}/profile", json=payload)
+                                if r and r.status_code == 200:
+                                    st.success("Updated!")
+                                    time.sleep(0.5)
+                                    st.rerun()
+
+                # Subject chart
+                if s.get("subjects") and s.get("marks"):
+                    st.markdown("### 📚 Subject-wise Performance")
+                    df = pd.DataFrame({"Subject": s["subjects"], "Marks": s["marks"]})
+                    fig = px.bar(df, x="Subject", y="Marks", color="Marks",
+                                 color_continuous_scale="RdYlGn", text="Marks")
+                    fig.update_traces(texttemplate="%{text:.0f}", textposition="outside")
+                    fig.update_layout(yaxis_range=[0, 105], showlegend=False)
+                    st.plotly_chart(fig, use_container_width=True)
+
+                # Attendance
+                st.markdown("### 📅 Attendance Summary")
+                att = prof.get("attendance", {})
+                if att:
+                    total_att = sum(att.values())
+                    present = att.get("Present", 0)
+                    rate = (present / total_att * 100) if total_att > 0 else 0
+                    c1, c2, c3, c4, c5 = st.columns(5)
+                    with c1: st.metric("Total", total_att)
+                    with c2: st.metric("Present", present)
+                    with c3: st.metric("Absent", att.get("Absent", 0))
+                    with c4: st.metric("Late", att.get("Late", 0))
+                    with c5: st.metric("Rate", f"{rate:.1f}%")
+                    st.progress(rate / 100)
+                else:
+                    st.info("No attendance records")
+
+                # Heatmap
+                st.markdown("### 🔥 Attendance Heatmap")
+                r = api_get(f"/attendance/{sid}/heatmap")
+                hdata = handle_response(r, show_error=False) if r else None
+                if hdata and hdata.get("heatmap"):
+                    hm = hdata["heatmap"]
+                    if hm:
+                        hm_df = pd.DataFrame(hm)
+                        hm_df["date"] = pd.to_datetime(hm_df["date"])
+                        color_map = {"present": 2, "partial": 1, "absent": 0}
+                        hm_df["color"] = hm_df["status"].map(color_map)
+
+                        fig = px.scatter(
+                            hm_df, x="date", y=[1] * len(hm_df),
+                            color="status",
+                            color_discrete_map={"present": "#10b981", "partial": "#f59e0b", "absent": "#ef4444"},
+                            size=[20] * len(hm_df),
+                            hover_data=["date", "count", "score"]
+                        )
+                        fig.update_yaxes(showticklabels=False)
+                        fig.update_layout(height=150, showlegend=True)
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("No attendance data for heatmap")
+                else:
+                    st.info("No heatmap data")
+
+                # Trends
+                if prof.get("trends"):
+                    st.markdown("### 📉 Performance Trends")
+                    tdf = pd.DataFrame(prof["trends"])
+                    if "created_at" in tdf.columns and "average" in tdf.columns:
+                        tdf["created_at"] = pd.to_datetime(tdf["created_at"])
+                        fig = px.line(tdf, x="created_at", y="average", markers=True)
+                        st.plotly_chart(fig, use_container_width=True)
+
+                # Parents
+                if prof.get("parents"):
+                    st.markdown("### 👨‍👩‍👧 Linked Parents")
+                    st.dataframe(pd.DataFrame(prof["parents"]), use_container_width=True)
+
+                # Actions
+                st.markdown("---")
+                c1, c2 = st.columns(2)
+                with c1:
+                    pdf_tpl = st.selectbox("PDF Template", ["classic", "modern", "minimal"], key="profile_tpl")
+                with c2:
+                    if st.button("📄 Download PDF Report", use_container_width=True):
+                        endpoint = (f"/students/{sid}/report-card"
+                                    if pdf_tpl == "classic"
+                                    else f"/students/{sid}/report-card/{pdf_tpl}")
+                        r = api_get(endpoint)
+                        if r and r.status_code == 200:
+                            st.download_button("💾 Save PDF", data=r.content,
+                                              file_name=f"report_{sid}_{pdf_tpl}.pdf",
+                                              mime="application/pdf")
+
+
+# ============================================================
+# PAGE: SAVED FILTERS
+# ============================================================
+elif selected == t("filters"):
+    st.markdown(f'<div class="main-header"><h1>{t("filters")}</h1><p>Save and reuse filter presets</p></div>', unsafe_allow_html=True)
+
+    tab1, tab2 = st.tabs(["📋 My Filters", "➕ Create"])
+
+    with tab1:
+        r = api_get("/filters")
+        data = handle_response(r, show_error=False) if r else None
+        filters = data.get("filters", []) if data else []
+
+        if filters:
+            st.metric("Saved Filters", len(filters))
+            for f in filters:
+                with st.expander(f"🔍 {f['name']} ({f['entity']})"):
+                    try:
+                        filter_data = json.loads(f["filter_json"])
+                        st.json(filter_data)
+                    except Exception:
+                        st.code(f["filter_json"])
+
+                    st.caption(f"Created: {f.get('created_at', 'N/A')}  |  Shared: {'Yes' if f.get('is_shared') else 'No'}")
+
+                    if f.get("user_id") == user["id"]:
+                        if st.button(f"🗑️ Delete", key=f"del_{f['id']}"):
+                            r = api_delete(f"/filters/{f['id']}")
+                            if r and r.status_code == 200:
+                                st.success("Deleted")
+                                st.rerun()
+        else:
+            st.info("No saved filters yet")
+
+    with tab2:
+        st.markdown("### Create Filter Preset")
+        with st.form("save_filter"):
+            fn = st.text_input("Filter Name *", placeholder="High Performers")
+            fe = st.selectbox("Entity", ["students", "users"])
+            fj = st.text_area("Filter JSON *", placeholder='{"grade": "A+", "min_average": 90}')
+            fs = st.checkbox("Share with all users")
+
+            if st.form_submit_button("💾 Save Filter", type="primary"):
+                if not fn or not fj:
+                    st.warning("Enter name and filter data")
+                else:
+                    try:
+                        json.loads(fj)
+                        payload = {
+                            "name": fn, "entity": fe,
+                            "filter_json": fj, "is_shared": fs,
+                        }
+                        r = api_post("/filters/save", json=payload)
+                        if r and r.status_code == 200:
+                            st.success("Filter saved!")
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error("Failed")
+                    except json.JSONDecodeError:
+                        st.error("Invalid JSON format")
+
+
+# ============================================================
+# PAGE: LIVE FEED (WebSocket)
+# ============================================================
+elif selected == t("live"):
+    st.markdown(f'<div class="main-header"><h1>{t("live")}</h1><p>Real-time activity feed</p></div>', unsafe_allow_html=True)
+
+    st.info("🔔 Live updates when actions happen in the system")
 
     c1, c2 = st.columns([3, 1])
     with c2:
+        if st.button("🔄 Refresh", use_container_width=True):
+            st.rerun()
+        if st.button("📡 Send Test Event", use_container_width=True):
+            r = api_get("/ws/test")
+            if r and r.status_code == 200:
+                st.success("Test event sent!")
+
+    # Show recent live events from DB
+    with st.spinner("Loading live events..."):
+        try:
+            # We'll display them by reading from the DB via a small helper endpoint
+            pass
+        except Exception:
+            pass
+
+    st.markdown("### 📋 How WebSocket Works")
+    st.markdown("""
+    The WebSocket connection at `ws://localhost:8000/ws/notifications` pushes events in real-time to connected clients.
+
+    **Events you'll receive:**
+    - `student_created` — When a new student is added
+    - `photo_uploaded` — When a student photo is uploaded
+    - `exam_created` — When an exam is scheduled
+    - `assignment_created` — When a new assignment is added
+    - `fee_paid` — When a fee payment is recorded
+    - `test` — Test events
+
+    **To test from Python:**
+    ```python
+    import asyncio
+    import websockets
+    import json
+
+    async def listen():
+        uri = f"ws://localhost:8000/ws/notifications?token=YOUR_TOKEN"
+        async with websockets.connect(uri) as ws:
+            while True:
+                msg = await ws.recv()
+                print(json.loads(msg))
+
+    asyncio.run(listen())
+""")
+# ============================================================
+# PAGE: NOTIFICATIONS
+# ============================================================
+elif selected == t("notifications"):
+    st.markdown(f'<div class="main-header"><h1>{t("notifications")}</h1></div>', unsafe_allow_html=True)
+    c1, c2 = st.columns([3, 1])
+    with c2:
         if st.button("✅ Mark All Read", use_container_width=True):
-            resp = api_put("/notifications/mark-all-read")
-            if resp and resp.status_code == 200:
-                st.success("Done!")
-                st.rerun()
-
-    resp = api_get("/notifications", params={"limit": 100})
-    data = handle_response(resp) if resp else None
-
+            api_put("/notifications/mark-all-read")
+            st.rerun()
+    r = api_get("/notifications", params={"limit": 100})
+    data = handle_response(r, show_error=False) if r else None
     if data:
-        st.info(f"📬 Total: {data['count']} | Unread: {data['unread_count']}")
-
+        st.info(f"Total: {data['count']} | Unread: {data['unread_count']}")
         for n in data.get("notifications", []):
             icon = {"Achievement": "🏆", "Warning": "⚠️", "Success": "✅", "Info": "ℹ️"}.get(n["type"], "📌")
-            dot = "🔵" if not n["is_read"] else "⚪"
+            st.markdown(f"{'🔵' if not n['is_read'] else '⚪'} {icon} {n['type']} — {n['message']}")
+            st.caption(n["created_at"])
+            st.divider()
 
-            with st.container():
-                c1, c2 = st.columns([5, 1])
-                with c1:
-                    st.markdown(f"{dot} **{icon} {n['type']}** — {n['message']}")
-                    st.caption(f"🕐 {n['created_at']}")
-                with c2:
-                    if not n["is_read"]:
-                        if st.button("Read", key=f"r_{n['id']}"):
-                            api_put(f"/notifications/mark-read/{n['id']}")
-                            st.rerun()
-                st.divider()
 
 # ============================================================
-# PAGE: COMPARE
+# PAGE: SCHEDULED REPORTS
 # ============================================================
-elif selected == "🔄 Compare":
-    st.markdown("""
-        <div class="main-header">
-            <h1>🔄 Compare Students</h1>
-            <p>Side-by-side comparison</p>
-        </div>
-    """, unsafe_allow_html=True)
+elif selected == t("scheduled_reports"):
+    st.markdown(f'<div class="main-header"><h1>{t("scheduled_reports")}</h1><p>Automated email reports</p></div>', unsafe_allow_html=True)
 
-    resp = api_get("/students", params={"limit": 100})
-    data = handle_response(resp) if resp else None
-
-    if data and data["count"] >= 2:
-        opts = {f"{s['name']} (ID: {s['id']})": s['id'] for s in data["students"]}
-        selected_students = st.multiselect(
-            "Select students (min 2)",
-            list(opts.keys()),
-            default=list(opts.keys())[:min(3, len(opts))]
-        )
-
-        if len(selected_students) >= 2 and st.button("📊 Compare", type="primary"):
-            ids = [opts[s] for s in selected_students]
-            resp = api_post("/students/compare", json={"student_ids": ids})
-            result = handle_response(resp) if resp else None
-
-            if result:
-                st.success(f"🏆 Winner: **{result['winner']['name']}** ({result['winner']['average']:.2f}%)")
-
-                df = pd.DataFrame(result["comparison"])
-                st.dataframe(df, use_container_width=True)
-
-                fig = go.Figure()
-                fig.add_trace(go.Bar(
-                    x=[c["name"] for c in result["comparison"]],
-                    y=[c["average"] for c in result["comparison"]],
-                    marker_color=["#10b981" if c["name"] == result["winner"]["name"] else "#667eea"
-                                  for c in result["comparison"]],
-                    text=[f"{c['average']:.1f}" for c in result["comparison"]],
-                    textposition="outside"
-                ))
-                fig.update_layout(yaxis_range=[0, 105], showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Need at least 2 students")
-
-# ============================================================
-# PAGE: TRENDS
-# ============================================================
-elif selected == "📉 Trends" or selected == "📉 My Progress":
-    st.markdown("""
-        <div class="main-header">
-            <h1>📉 Performance Trends</h1>
-            <p>Track progress over time</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-    resp = api_get("/students", params={"limit": 100})
-    data = handle_response(resp) if resp else None
-
-    if data and data["count"] > 0:
-        opts = {f"{s['name']} (ID: {s['id']})": s['id'] for s in data["students"]}
-        sel = st.selectbox("Select Student", list(opts.keys()), key="tr_sel")
-
-        if st.button("📊 Analyze Trends", type="primary"):
-            sid = opts[sel]
-            resp = api_get(f"/trends/{sid}")
-            result = handle_response(resp) if resp else None
-
-            if result:
-                if "error" in result:
-                    st.error(result["error"])
-                elif "Not enough" in result.get("message", ""):
-                    st.warning(result["message"])
-                else:
-                    c1, c2, c3 = st.columns(3)
-                    with c1:
-                        st.metric("First", f"{result['first_average']:.2f}")
-                    with c2:
-                        st.metric("Current", f"{result['current_average']:.2f}")
-                    with c3:
-                        st.metric("Change", f"{result['improvement']:+.2f}",
-                                 delta=f"{result['improvement']:+.2f}")
-
-                    st.markdown(f"### {result['trend_direction']}")
-
-                    if result.get("trends"):
-                        df = pd.DataFrame(result["trends"])
-                        if "created_at" in df.columns:
-                            df["created_at"] = pd.to_datetime(df["created_at"])
-                            fig = px.line(df, x="created_at", y="average", markers=True)
-                            st.plotly_chart(fig, use_container_width=True)
-
-# ============================================================
-# PAGE: IMPORT/EXPORT
-# ============================================================
-elif selected == "📤 Import/Export":
-    st.markdown("""
-        <div class="main-header">
-            <h1>📤 Import & Export</h1>
-            <p>Bulk operations</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-    tab1, tab2 = st.tabs(["📥 Import", "📤 Export"])
+    tab1, tab2 = st.tabs(["📋 Scheduled", "➕ Add New"])
 
     with tab1:
-        st.markdown("### 📥 Bulk Import Students from CSV")
+        r = api_get("/reports/scheduled")
+        data = handle_response(r, show_error=False) if r else None
+        reports = data.get("reports", []) if data else []
 
-        c1, c2 = st.columns([3, 1])
-        with c2:
-            if st.button("📋 Template", use_container_width=True):
-                resp = api_get("/students/import-template")
-                if resp and resp.status_code == 200:
-                    st.download_button("💾 Save Template", data=resp.content,
-                                      file_name="template.csv", mime="text/csv")
+        if reports:
+            st.metric("Active Reports", len([x for x in reports if x.get("enabled")]))
+            df = pd.DataFrame(reports)
+            st.dataframe(df, use_container_width=True)
 
-        csv_help = (
-            "**CSV Format:**\n\n"
-            "```\n"
-            "name,marks,subjects,semester,department,batch_year\n"
-            'John Doe,"85,92,78","Mathematics,Physics,English",Fall 2024,CS,2024\n'
-            "```\n\n"
-            "**Required columns:** `name`, `marks`, `subjects`\n\n"
-            "**Optional columns:** `semester`, `department`, `batch_year`\n\n"
-            "**Note:** `marks` and `subjects` are comma-separated (wrap in quotes)\n\n"
-            "⚠️ Subject names must be meaningful (no gibberish)"
-        )
-        st.markdown(csv_help)
-
-        uploaded = st.file_uploader("Choose CSV file", type=["csv"])
-        if uploaded:
-            try:
-                preview = pd.read_csv(uploaded)
-                st.markdown("**Preview:**")
-                st.dataframe(preview.head(10), use_container_width=True)
-                st.caption(f"Rows: {len(preview)}")
-                uploaded.seek(0)
-            except Exception as e:
-                st.error(f"Preview failed: {e}")
-
-            if st.button("🚀 Import Now", type="primary", use_container_width=True):
-                with st.spinner("Importing..."):
-                    try:
-                        files = {"file": (uploaded.name, uploaded.getvalue(), "text/csv")}
-                        resp = api_post("/students/import-csv", files=files)
-                        result = handle_response(resp) if resp else None
-                        if result:
-                            st.success(result["message"])
-                            if result.get("failed"):
-                                with st.expander(f"⚠️ {result['failed_count']} failures"):
-                                    for e in result["failed"]:
-                                        st.write(f"- {e}")
-                            st.balloons()
-                    except Exception as e:
-                        st.error(f"Import failed: {e}")
+            st.markdown("### 🗑️ Delete Report")
+            opts = {f"{r_['report_type']} → {r_['recipients']}": r_["id"] for r_ in reports}
+            sel = st.selectbox("Select report", list(opts.keys()))
+            if st.button("🗑️ Delete", type="secondary"):
+                r = api_delete(f"/reports/scheduled/{opts[sel]}")
+                if r and r.status_code == 200:
+                    st.success("Deleted")
+                    st.rerun()
+        else:
+            st.info("No scheduled reports yet")
 
     with tab2:
-        st.markdown("### 📤 Export All Data")
-        c1, c2 = st.columns(2)
+        st.markdown("### Create Scheduled Report")
+        st.caption("Reports are sent every 7 days automatically")
+        with st.form("create_report"):
+            rt = st.selectbox("Report Type", ["weekly_summary", "performance", "attendance"])
+            rr = st.text_input("Recipients (comma-separated emails) *",
+                               placeholder="admin@school.com, principal@school.com")
+            rs = st.selectbox("Schedule", ["weekly", "daily", "monthly"])
+            re = st.checkbox("Enable", value=True)
 
-        with c1:
-            if st.button("📊 Download CSV", use_container_width=True, key="exp_csv"):
-                resp = api_get("/export/csv")
-                if resp and resp.status_code == 200:
-                    st.download_button(
-                        "💾 Save CSV",
-                        data=resp.content,
-                        file_name=f"students_{datetime.now().strftime('%Y%m%d')}.csv",
-                        mime="text/csv"
-                    )
+            if st.form_submit_button("➕ Create Report", type="primary"):
+                if not rr:
+                    st.warning("Enter recipient emails")
+                else:
+                    payload = {
+                        "report_type": rt, "recipients": rr,
+                        "schedule": rs, "enabled": re,
+                    }
+                    r = api_post("/reports/schedule", json=payload)
+                    if r and r.status_code == 200:
+                        st.success("Scheduled!")
+                        st.rerun()
 
-        with c2:
-            if st.button("📋 Download JSON", use_container_width=True, key="exp_json"):
-                resp = api_get("/export/json")
-                if resp and resp.status_code == 200:
-                    st.download_button(
-                        "💾 Save JSON",
-                        data=json.dumps(resp.json(), indent=2),
-                        file_name=f"students_{datetime.now().strftime('%Y%m%d')}.json",
-                        mime="application/json"
-                    )
 
 # ============================================================
-# PAGE: USERS (ADMIN ONLY)
+# PAGE: BACKUP
 # ============================================================
-elif selected == "👥 Users" and user_role == "admin":
-    st.markdown("""
-        <div class="main-header">
-            <h1>👥 User Management</h1>
-            <p>Manage accounts, roles, and permissions</p>
+elif selected == t("backup"):
+    st.markdown(f'<div class="main-header"><h1>{t("backup")}</h1><p>Database backup & restore</p></div>', unsafe_allow_html=True)
+
+    tab1, tab2, tab3 = st.tabs(["💾 Create Backup", "📋 Backup History", "♻️ Restore"])
+
+    with tab1:
+        st.markdown("### Create Manual Backup")
+        st.info("Backups include the database and all uploaded photos.")
+
+        if st.button("💾 Create Backup Now", type="primary", use_container_width=True):
+            with st.spinner("Creating backup..."):
+                r = api_post("/backup/create")
+                if r and r.status_code == 200:
+                    d = r.json()
+                    st.success(f"✅ Backup created: {d['filename']} ({d['size_mb']} MB)")
+                    st.balloons()
+                else:
+                    st.error(r.json().get("detail", "Failed"))
+
+        st.markdown("---")
+        st.markdown("### 🤖 Auto Backups")
+        st.caption("Automatic backups run every 24 hours, keeping the last 7 backups")
+
+        r = api_get("/backup/auto-list")
+        auto = handle_response(r, show_error=False) if r else None
+        if auto and auto.get("backups"):
+            st.metric("Auto Backups", len(auto["backups"]))
+            st.dataframe(pd.DataFrame(auto["backups"]), use_container_width=True)
+
+    with tab2:
+        st.markdown("### Backup History")
+        r = api_get("/backup/list")
+        data = handle_response(r, show_error=False) if r else None
+        backups = data.get("backups", []) if data else []
+
+        if backups:
+            st.metric("Total Backups", len(backups))
+            for b in backups:
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    st.markdown(f"{b['filename']} — {round(b.get('size_bytes', 0) / 1024 / 1024, 2)} MB")
+                    st.caption(f"{b.get('created_at', 'N/A')} | Type: {b.get('backup_type', 'manual')}")
+                with c2:
+                    if st.button("📥 Download", key=f"dl_{b['id']}"):
+                        r = api_get(f"/backup/download/{b['filename']}")
+                        if r and r.status_code == 200:
+                            st.download_button("💾 Save", data=r.content,
+                                               file_name=b["filename"],
+                                               mime="application/zip",
+                                               key=f"dl_btn_{b['id']}")
+                st.divider()
+        else:
+            st.info("No backups yet")
+
+    with tab3:
+        st.markdown("### Restore from Backup")
+        st.warning("⚠️ This will replace the current database! An emergency backup will be created automatically.")
+
+        uploaded = st.file_uploader("Upload backup ZIP file", type=["zip"])
+        if uploaded:
+            if st.button("♻️ Restore Backup", type="primary"):
+                with st.spinner("Restoring..."):
+                    files = {"file": (uploaded.name, uploaded.getvalue(), "application/zip")}
+                    r = api_post("/backup/restore", files=files)
+                    if r and r.status_code == 200:
+                        d = r.json()
+                        st.success(f"✅ Restored! Emergency backup: {d['emergency_backup']}")
+                        st.balloons()
+                    else:
+                        st.error(r.json().get("detail", "Failed"))
+
+
+# ============================================================
+# PAGE: PDF TEMPLATES
+# ============================================================
+elif selected == t("pdf_templates"):
+    st.markdown(f'<div class="main-header"><h1>{t("pdf_templates")}</h1><p>Choose PDF report card styles</p></div>', unsafe_allow_html=True)
+
+    st.markdown("### 🎨 Available Templates")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("""
+        <div class="metric-card">
+            <div class="metric-icon">📄</div>
+            <h3>Classic</h3>
+            <p>Original simple layout</p>
         </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+    with c2:
+        st.markdown("""
+        <div class="metric-card">
+            <div class="metric-icon">🎨</div>
+            <h3>Modern</h3>
+            <p>Colorful with grade badges</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with c3:
+        st.markdown("""
+        <div class="metric-card">
+            <div class="metric-icon">📋</div>
+            <h3>Minimal</h3>
+            <p>Clean and simple</p>
+        </div>
+        """, unsafe_allow_html=True)
 
-    resp = api_get("/auth/users")
-    data = handle_response(resp) if resp else None
+    st.markdown("---")
+    st.markdown("### 📥 Generate Report Card")
 
+    r = api_get("/students", params={"limit": 500})
+    data = handle_response(r, show_error=False) if r else None
+    students = data.get("students", []) if data else []
+
+    if students:
+        c1, c2 = st.columns(2)
+        with c1:
+            opts = {f"{s['name']} (ID {s['id']})": s["id"] for s in students}
+            sel = st.selectbox("Student", list(opts.keys()))
+        with c2:
+            tpl = st.selectbox("Template", ["classic", "modern", "minimal"])
+
+        if st.button("📄 Generate PDF", type="primary", use_container_width=True):
+            sid = opts[sel]
+            endpoint = f"/students/{sid}/report-card" if tpl == "classic" else f"/students/{sid}/report-card/{tpl}"
+            r = api_get(endpoint)
+            if r and r.status_code == 200:
+                st.download_button("💾 Download PDF", data=r.content,
+                                   file_name=f"report_{sid}_{tpl}.pdf",
+                                   mime="application/pdf")
+    else:
+        st.info("No students yet")
+
+
+# ============================================================
+# PAGE: USERS (ADMIN)
+# ============================================================
+elif selected == t("users") and user_role == "admin":
+    st.markdown(f'<div class="main-header"><h1>{t("users")}</h1></div>', unsafe_allow_html=True)
+    r = api_get("/auth/users")
+    data = handle_response(r) if r else None
     if data:
         users = data["users"]
         st.metric("Total Users", len(users))
+        st.dataframe(pd.DataFrame(users), use_container_width=True)
 
-        df = pd.DataFrame(users)
-        st.dataframe(df, use_container_width=True)
-
-        st.markdown("---")
         st.markdown("### 🔧 Actions")
-
-        opts = {f"{u['username']} ({u['role']})": u['id'] for u in users}
+        opts = {f"{u['username']} ({u['role']})": u["id"] for u in users}
         sel = st.selectbox("Select user", list(opts.keys()), key="admin_sel")
         uid = opts[sel]
-
         selected_user = next((u for u in users if u["id"] == uid), None)
         current_role = selected_user["role"] if selected_user else "teacher"
 
-        st.info(f"**Current role:** `{current_role}`")
+        st.info(f"Current role: {current_role}")
+
+        if uid == user["id"]:
+            st.warning("⚠️ You selected your own account. You cannot demote yourself.")
 
         c1, c2, c3 = st.columns(3)
-
         with c1:
             if st.button("🔄 Toggle Active", use_container_width=True):
-                resp = api_put(f"/auth/users/{uid}/toggle")
-                if resp and resp.status_code == 200:
-                    st.success("Status updated")
+                r = api_put(f"/auth/users/{uid}/toggle")
+                if r and r.status_code == 200:
+                    st.success("Updated")
                     time.sleep(0.5)
                     st.rerun()
-
+                elif r and r.status_code == 400:
+                    st.error(r.json().get("detail", "Error"))
         with c2:
-            new_role = st.selectbox(
-                "New Role",
-                ["admin", "teacher", "student", "parent"],
-                index=["admin", "teacher", "student", "parent"].index(current_role),
-                key="admin_role"
-            )
+            new_role = st.selectbox("New Role", ["admin", "teacher", "student", "parent"],
+                                    index=["admin", "teacher", "student", "parent"].index(current_role),
+                                    key="admin_role")
             if st.button("👤 Change Role", use_container_width=True):
                 if new_role == current_role:
                     st.warning(f"Already '{new_role}'")
                 else:
-                    resp = api_put(f"/auth/users/{uid}/role?role={new_role}")
-                    if resp and resp.status_code == 200:
-                        st.success(resp.json().get("message", "Updated"))
+                    r = api_put(f"/auth/users/{uid}/role", json={"role": new_role})
+                    if r and r.status_code == 200:
+                        st.success(r.json().get("message", "Updated"))
                         time.sleep(0.5)
                         st.rerun()
-
+                    elif r and r.status_code == 400:
+                        st.error(f"🚫 {r.json().get('detail', 'Error')}")
         with c3:
-            if st.button("↩️ Revert Last Change", use_container_width=True, type="secondary"):
-                resp = api_put(f"/auth/users/{uid}/revert-role")
-                if resp and resp.status_code == 200:
-                    st.success(resp.json().get("message", "Reverted"))
+            if st.button("↩️ Revert Last", use_container_width=True, type="secondary"):
+                r = api_put(f"/auth/users/{uid}/revert-role")
+                if r and r.status_code == 200:
+                    st.success(r.json().get("message", "Reverted"))
                     time.sleep(0.5)
                     st.rerun()
-                elif resp and resp.status_code == 400:
-                    st.warning(resp.json().get("detail", "No previous change to revert"))
+                elif r and r.status_code == 400:
+                    st.warning(r.json().get("detail", "Error"))
 
-        st.markdown("")
-        col_l, col_m, col_r = st.columns([2, 1, 2])
-        with col_m:
-            if st.button("🗑️ Delete User", use_container_width=True, type="secondary"):
-                if uid == user["id"]:
-                    st.error("❌ Cannot delete your own account")
-                else:
-                    resp = api_delete(f"/auth/users/{uid}")
-                    if resp and resp.status_code == 200:
-                        st.success("User deleted")
-                        time.sleep(0.5)
-                        st.rerun()
-
-        # Role history
         st.markdown("---")
-        st.markdown(f"### 📜 Role Change History — {selected_user['username']}")
-
-        hist_resp = api_get(f"/auth/users/{uid}/role-history")
-        hist_data = handle_response(hist_resp, show_error=False) if hist_resp else None
-
-        if hist_data and hist_data.get("history"):
-            hist_df = pd.DataFrame(hist_data["history"])
-            display_cols = ["created_at", "old_role", "new_role", "changed_by_username"]
-            available = [c for c in display_cols if c in hist_df.columns]
-            if available:
-                hist_df = hist_df[available]
-                hist_df.columns = [c.replace("_", " ").title() for c in hist_df.columns]
-            st.dataframe(hist_df, use_container_width=True)
-            st.caption(f"Total role changes: {len(hist_data['history'])}")
+        st.markdown(f"### 📜 Role History — {selected_user['username']}")
+        r = api_get(f"/auth/users/{uid}/role-history")
+        hist = handle_response(r, show_error=False) if r else None
+        if hist and hist.get("history"):
+            st.dataframe(pd.DataFrame(hist["history"]), use_container_width=True)
         else:
-            st.info("📭 No role changes recorded for this user yet")
+            st.info("No role changes recorded")
+
 
 # ============================================================
-# PAGE: AUDIT LOG (ADMIN ONLY)
+# PAGE: AUDIT LOG
 # ============================================================
-elif selected == "📋 Audit Log" and user_role == "admin":
-    st.markdown("""
-        <div class="main-header">
-            <h1>📋 Audit Log</h1>
-            <p>Security and activity tracking</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-    tab1, tab2 = st.tabs(["📋 Activity Log", "🔐 Login Attempts"])
-
+elif selected == t("audit") and user_role == "admin":
+    st.markdown(f'<div class="main-header"><h1>{t("audit")}</h1></div>', unsafe_allow_html=True)
+    tab1, tab2 = st.tabs(["📋 Activity", "🔐 Login Attempts"])
     with tab1:
-        resp = api_get("/audit/logs", params={"limit": 200})
-        data = handle_response(resp) if resp else None
+        r = api_get("/audit/logs", params={"limit": 200})
+        data = handle_response(r, show_error=False) if r else None
         if data and data.get("logs"):
             st.dataframe(pd.DataFrame(data["logs"]), use_container_width=True)
         else:
-            st.info("No audit logs")
-
+            st.info("No logs")
     with tab2:
-        resp = api_get("/audit/login-attempts", params={"limit": 200})
-        data = handle_response(resp) if resp else None
+        r = api_get("/audit/login-attempts", params={"limit": 200})
+        data = handle_response(r, show_error=False) if r else None
         if data and data.get("attempts"):
             st.dataframe(pd.DataFrame(data["attempts"]), use_container_width=True)
         else:
-            st.info("No login attempts")
+            st.info("No attempts")
+
 
 # ============================================================
-# PAGE: PARENT - MY CHILDREN
+# PAGE: SECURITY (2FA)
 # ============================================================
-elif selected == "👨‍👩‍👧 My Children" and user_role == "parent":
-    st.markdown("""
-        <div class="main-header">
-            <h1>👨‍👩‍👧 My Children</h1>
-            <p>View your children's progress</p>
-        </div>
-    """, unsafe_allow_html=True)
+elif selected == t("security"):
+    st.markdown(f'<div class="main-header"><h1>{t("security")}</h1><p>Two-Factor Authentication</p></div>', unsafe_allow_html=True)
 
-    resp = api_get("/parents/my-children")
-    data = handle_response(resp) if resp else None
+    r = api_get("/auth/me")
+    me = handle_response(r, show_error=False) if r else None
+    twofa_on = me.get("twofa_enabled", False) if me else False
 
+    if twofa_on:
+        st.success("✅ 2FA is enabled on your account")
+        with st.form("disable_2fa"):
+            code = st.text_input("Enter 2FA code to disable", max_chars=6)
+            if st.form_submit_button("Disable 2FA", type="secondary"):
+                r = api_post("/auth/2fa/disable", json={"code": code})
+                if r and r.status_code == 200:
+                    st.success("2FA disabled")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(r.json().get("detail", "Invalid code"))
+    else:
+        st.warning("⚠️ 2FA is not enabled")
+        st.markdown("""
+        **Enable 2FA**
+
+        1. Install Google Authenticator (or Authy) on your phone
+        2. Click Setup below
+        3. Scan the QR code with the app
+        4. Enter the 6-digit code to confirm
+        """)
+
+        if st.button("🔒 Setup 2FA", type="primary"):
+            r = api_post("/auth/2fa/setup")
+            data = handle_response(r) if r else None
+            if data:
+                st.session_state.fa_secret = data["secret"]
+                st.session_state.fa_qr = data["qr_code"]
+
+        if st.session_state.get("fa_qr"):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.image(st.session_state.fa_qr, caption="Scan with authenticator app")
+            with c2:
+                st.code(st.session_state.fa_secret, language="text")
+                st.caption("Or enter this secret manually")
+
+            with st.form("verify_2fa"):
+                code = st.text_input("Enter 6-digit code", max_chars=6)
+                if st.form_submit_button("✅ Verify & Enable", type="primary"):
+                    r = api_post("/auth/2fa/verify", json={"code": code})
+                    if r and r.status_code == 200:
+                        st.success("✅ 2FA enabled!")
+                        st.session_state.fa_qr = None
+                        st.session_state.fa_secret = None
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error(r.json().get("detail", "Invalid code"))
+
+
+# ============================================================
+# PARENT VIEW
+# ============================================================
+elif selected == t("my_children") and user_role == "parent":
+    st.markdown(f'<div class="main-header"><h1>{t("my_children")}</h1></div>', unsafe_allow_html=True)
+    r = api_get("/parents/my-children")
+    data = handle_response(r, show_error=False) if r else None
     if data and data.get("children"):
-        for child in data["children"]:
+        for c in data["children"]:
             st.markdown(f"""
-                <div class="metric-card" style="margin-bottom: 1rem;">
-                    <h3>🎓 {child['name']}</h3>
-                    <p><b>Grade:</b> {child['grade']} | <b>Average:</b> {child['average']:.2f}%</p>
-                    <p><b>Department:</b> {child.get('department', 'N/A')} | <b>Semester:</b> {child.get('semester', 'N/A')}</p>
-                </div>
+            <div class="metric-card" style="margin-bottom: 1rem;">
+                <h3>🎓 {c['name']}</h3>
+                <p><b>Grade:</b> {c['grade']} | <b>Average:</b> {c['average']:.2f}%</p>
+                <p><b>Class:</b> {c.get('class_name', 'N/A')} | <b>Semester:</b> {c.get('semester', 'N/A')}</p>
+            </div>
             """, unsafe_allow_html=True)
     else:
-        st.info("👶 No children linked yet. Contact admin.")
+        st.info("No children linked yet. Contact admin.")
+
 
 # ============================================================
-# PAGE: STUDENT - MY RESULTS
+# STUDENT VIEW
 # ============================================================
-elif selected == "📊 My Results" and user_role == "student":
-    st.markdown("""
-        <div class="main-header">
-            <h1>📊 My Results</h1>
-            <p>Your academic performance</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-    resp = api_get("/students", params={"limit": 10})
-    data = handle_response(resp) if resp else None
-
+elif selected == t("my_results") and user_role == "student":
+    st.markdown(f'<div class="main-header"><h1>{t("my_results")}</h1></div>', unsafe_allow_html=True)
+    r = api_get("/students", params={"limit": 10})
+    data = handle_response(r, show_error=False) if r else None
     if data and data["count"] > 0:
-        student = data["students"][0]
-        st.markdown(f"### 🎓 {student['name']}")
+        s = data["students"][0]
+        st.markdown(f"### 🎓 {s['name']}")
+        c1, c2, c3 = st.columns(3)
+        with c1: render_metric("📊", f"{s['average']:.2f}%", "Average")
+        with c2: render_metric("🏆", s["grade"], "Grade")
+        with c3: render_metric("📈", f"{s['total_marks']:.0f}", "Total")
+        if s.get("subjects") and s.get("marks"):
+            df = pd.DataFrame({"Subject": s["subjects"], "Marks": s["marks"]})
+            st.plotly_chart(px.bar(df, x="Subject", y="Marks", color="Marks",
+                                   color_continuous_scale="RdYlGn"), use_container_width=True)
+    else:
+        st.info("No results yet")
 
+
+# ============================================================
+# COMPARE / TRENDS / IMPORT-EXPORT (existing features)
+# ============================================================
+elif selected == t("compare"):
+    st.markdown(f'<div class="main-header"><h1>{t("compare")}</h1></div>', unsafe_allow_html=True)
+    r = api_get("/students", params={"limit": 100})
+    data = handle_response(r, show_error=False) if r else None
+    if data and data["count"] >= 2:
+        opts = {f"{s['name']}": s["id"] for s in data["students"]}
+        sel = st.multiselect("Select (min 2)", list(opts.keys()),
+                             default=list(opts.keys())[:min(2, len(opts))])
+        if len(sel) >= 2 and st.button("📊 Compare", type="primary"):
+            r = api_post("/students/compare", json={"student_ids": [opts[x] for x in sel]})
+            res = handle_response(r) if r else None
+            if res:
+                st.success(f"Winner: {res['winner']['name']}")
+                st.dataframe(pd.DataFrame(res["comparison"]), use_container_width=True)
+
+
+elif selected == t("trends") or selected == "📉 My Progress":
+    st.markdown(f'<div class="main-header"><h1>{t("trends")}</h1></div>', unsafe_allow_html=True)
+    r = api_get("/students", params={"limit": 100})
+    data = handle_response(r, show_error=False) if r else None
+    if data and data["count"] > 0:
+        opts = {f"{s['name']}": s["id"] for s in data["students"]}
+        sel = st.selectbox("Student", list(opts.keys()))
+        if st.button("📊 Analyze", type="primary"):
+            r = api_get(f"/trends/{opts[sel]}")
+            res = handle_response(r, show_error=False) if r else None
+            if res:
+                if "Not enough" in res.get("message", ""):
+                    st.warning(res["message"])
+                elif "error" in res:
+                    st.error(res["error"])
+                else:
+                    c1, c2, c3 = st.columns(3)
+                    with c1: st.metric("First", f"{res['first_average']:.2f}")
+                    with c2: st.metric("Current", f"{res['current_average']:.2f}")
+                    with c3: st.metric("Change", f"{res['improvement']:+.2f}")
+                    if res.get("trends"):
+                        df = pd.DataFrame(res["trends"])
+                        if "created_at" in df.columns:
+                            df["created_at"] = pd.to_datetime(df["created_at"])
+                        st.plotly_chart(px.line(df, x="created_at", y="average", markers=True),
+                                        use_container_width=True)
+
+
+elif selected == t("import_export"):
+    st.markdown(f'<div class="main-header"><h1>{t("import_export")}</h1></div>', unsafe_allow_html=True)
+    tab1, tab2 = st.tabs(["📥 Import", "📤 Export"])
+    with tab1:
+        c1, c2 = st.columns([3, 1])
+        with c2:
+            if st.button("📋 Template", use_container_width=True):
+                r = api_get("/students/import-template")
+                if r and r.status_code == 200:
+                    st.download_button("💾 Save", data=r.content,
+                                       file_name="template.csv", mime="text/csv")
+        uploaded = st.file_uploader("CSV file", type=["csv"])
+        if uploaded:
+            try:
+                preview = pd.read_csv(uploaded)
+                st.dataframe(preview.head(10), use_container_width=True)
+                uploaded.seek(0)
+            except Exception as e:
+                st.error(f"Preview failed: {e}")
+            if st.button("🚀 Import", type="primary", use_container_width=True):
+                files = {"file": (uploaded.name, uploaded.getvalue(), "text/csv")}
+                r = api_post("/students/import-csv", files=files)
+                res = handle_response(r) if r else None
+                if res:
+                    st.success(res["message"])
+                    if res.get("failed"):
+                        for e in res["failed"][:5]:
+                            st.write(f"- {e}")
+
+    with tab2:
         c1, c2, c3 = st.columns(3)
         with c1:
-            render_metric("📊", f"{student['average']:.2f}%", "Average")
+            if st.button("📊 CSV", use_container_width=True, key="e1"):
+                r = api_get("/export/csv")
+                if r and r.status_code == 200:
+                    st.download_button("💾 Save CSV", data=r.content,
+                                       file_name="students.csv", mime="text/csv")
         with c2:
-            render_metric("🏆", student["grade"], "Grade")
+            if st.button("📋 JSON", use_container_width=True, key="e2"):
+                r = api_get("/export/json")
+                if r and r.status_code == 200:
+                    st.download_button("💾 Save JSON", data=json.dumps(r.json(), indent=2),
+                                       file_name="students.json", mime="application/json")
         with c3:
-            render_metric("📈", f"{student['total_marks']:.0f}", "Total Marks")
+            if st.button("📈 Excel", use_container_width=True, key="e3"):
+                r = api_get("/export/excel")
+                if r and r.status_code == 200:
+                    st.download_button("💾 Save .xlsx", data=r.content,
+                                       file_name="students.xlsx",
+                                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        if student.get("subjects") and student.get("marks"):
-            df = pd.DataFrame({"Subject": student["subjects"], "Marks": student["marks"]})
-            fig = px.bar(df, x="Subject", y="Marks", color="Marks", color_continuous_scale="RdYlGn")
-            fig.update_layout(yaxis_range=[0, 105], showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("📊 No results yet. Contact your teacher.")
 
 # ============================================================
 # FOOTER
 # ============================================================
 st.markdown("---")
 st.markdown(f"""
-    <div style="text-align: center; color: #6b7280; padding: 2rem 0;">
-        <p>🎓 Student Marks Analyzer Pro v6.0.0 | Secure Edition</p>
-        <p style="font-size: 0.8rem;">Logged in as {user_name} ({user_role})</p>
-    </div>
+<div style="text-align: center; color: #6b7280; padding: 2rem 0;">
+    <p>🎓 Student Marks Analyzer Pro v11.0.0 — Phase 3 Complete</p>
+    <p style="font-size: 0.8rem;">Logged in as {user_name} ({user_role})</p>
+</div>
 """, unsafe_allow_html=True)
