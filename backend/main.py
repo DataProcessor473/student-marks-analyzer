@@ -1,4 +1,8 @@
-﻿from fastapi import FastAPI, HTTPException, Query, Depends, UploadFile, File, Request, BackgroundTasks, WebSocket, WebSocketDisconnect
+"""
+Student Marks Analyzer — Complete Backend (Phase 1-4)
+Includes all features: auth, ML, notifications, themes, bulk import, PostgreSQL-ready.
+"""
+from fastapi import FastAPI, HTTPException, Query, Depends, UploadFile, File, Request, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordBearer
@@ -37,18 +41,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ============================================================
+# OPTIONAL IMPORTS (with fallbacks)
+# ============================================================
 try:
     from pdf_generator import generate_report_card
 except ImportError:
     generate_report_card = None
-    print("WARNING: pdf_generator.py not found - classic PDF disabled")
+    print("WARNING: pdf_generator.py not found")
 
 try:
     from pdf_templates import generate_modern_report, generate_minimal_report
 except ImportError:
     generate_modern_report = None
     generate_minimal_report = None
-    print("WARNING: pdf_templates.py not found - modern PDF disabled")
+    print("WARNING: pdf_templates.py not found")
 
 try:
     from models_phase3 import (
@@ -60,6 +67,13 @@ try:
     )
 except ImportError:
     print("WARNING: models_phase3.py not found")
+
+try:
+    from twilio.rest import Client as TwilioClient
+    TWILIO_AVAILABLE = True
+except ImportError:
+    TWILIO_AVAILABLE = False
+    print("WARNING: twilio not installed")
 
 
 # ============================================================
@@ -87,7 +101,6 @@ FAST2SMS_API_KEY = os.getenv("FAST2SMS_API_KEY", "").strip()
 
 TOTP_ISSUER = "StudentMarksAnalyzer"
 
-# Phase 3
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
 MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", 5))
 BACKUP_DIR = os.getenv("BACKUP_DIR", "backups")
@@ -98,19 +111,30 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
 
+# ============================================================
+# FEATURE 7: PostgreSQL Support (env-based)
+# ============================================================
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+USE_POSTGRES = bool(DATABASE_URL and DATABASE_URL.startswith("postgresql"))
+
+if USE_POSTGRES:
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        print(f"[OK] PostgreSQL mode enabled")
+    except ImportError:
+        USE_POSTGRES = False
+        print(f"[WARN] psycopg2 not installed - falling back to SQLite")
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "student_marks.db")
+
 REPORTS_DIR = os.path.join(os.path.dirname(__file__), "reports")
 os.makedirs(REPORTS_DIR, exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 os.makedirs(os.path.join(UPLOAD_DIR, "photos"), exist_ok=True)
 os.makedirs(os.path.join(BACKUP_DIR, "auto"), exist_ok=True)
-
-try:
-    from twilio.rest import Client as TwilioClient
-    TWILIO_AVAILABLE = True
-except ImportError:
-    TWILIO_AVAILABLE = False
-    print("WARNING: twilio not installed - WhatsApp disabled")
+os.makedirs(os.path.join(os.path.dirname(__file__), "models"), exist_ok=True)
 
 
 # ============================================================
@@ -118,8 +142,8 @@ except ImportError:
 # ============================================================
 app = FastAPI(
     title="Student Marks Analyzer API",
-    description="Complete API with all features + Phase 3",
-    version="11.0.0",
+    description="Complete API — Phases 1-4 with ML, themes, preferences",
+    version="12.0.0",
 )
 
 limiter = Limiter(key_func=get_remote_address)
@@ -342,28 +366,76 @@ def send_whatsapp_otp(phone: str, otp: str) -> bool:
 
 
 # ============================================================
-# DATABASE
+# DATABASE CONNECTION (SQLite or PostgreSQL)
 # ============================================================
-DB_PATH = os.path.join(os.path.dirname(__file__), "student_marks.db")
-
-
 @contextmanager
 def get_db_connection():
-    conn = sqlite3.connect(DB_PATH, timeout=30.0, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")
-        conn.execute("PRAGMA synchronous=NORMAL")
-    except Exception:
-        pass
-    try:
-        yield conn
-    finally:
-        conn.close()
+    """Returns a DB connection. Uses PostgreSQL if DATABASE_URL is set, else SQLite."""
+    if USE_POSTGRES:
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        try:
+            yield conn
+        finally:
+            conn.close()
+    else:
+        conn = sqlite3.connect(DB_PATH, timeout=30.0, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute("PRAGMA synchronous=NORMAL")
+        except Exception:
+            pass
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+
+def _sqlite_conn():
+    """Helper for SQLite fallback."""
+    return sqlite3.connect(DB_PATH, timeout=30.0, check_same_thread=False)
+
+
+def _q(query: str) -> str:
+    """Convert SQLite '?' placeholders to PostgreSQL '%s' when needed."""
+    if USE_POSTGRES:
+        return query.replace("?", "%s")
+    return query
 
 
 def init_database():
+    """Initialize DB. Skips on PostgreSQL (schema already migrated)."""
+    if USE_POSTGRES:
+        # PostgreSQL schema is managed externally (see migrate_to_postgres.py)
+        # Just ensure default admins exist
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) as count FROM users")
+                row = cursor.fetchone()
+                count = row["count"] if isinstance(row, dict) else row[0]
+                if count == 0:
+                    default_hash = get_password_hash("Admin@123")
+                    cursor.execute("""
+                        INSERT INTO users (username, email, hashed_password, full_name,
+                                           role, email_verified, phone_verified, theme)
+                        VALUES (%s, %s, %s, %s, %s, 1, 1, 'light')
+                    """, ("admin", "admin@example.com", default_hash, "Default Admin", "admin"))
+                    backup_hash = get_password_hash("Admin2@123")
+                    cursor.execute("""
+                        INSERT INTO users (username, email, hashed_password, full_name,
+                                           role, email_verified, phone_verified, theme)
+                        VALUES (%s, %s, %s, %s, %s, 1, 1, 'light')
+                    """, ("admin2", "admin2@example.com", backup_hash, "Backup Admin", "admin"))
+                    conn.commit()
+                    print("[OK] Default admins created")
+                print("[OK] PostgreSQL mode — schema verified")
+        except Exception as e:
+            print(f"[WARN] PostgreSQL init check failed: {e}")
+        return
+
+    # SQLite: create tables (original code)
     with get_db_connection() as conn:
         cursor = conn.cursor()
 
@@ -382,6 +454,7 @@ def init_database():
                 twofa_enabled INTEGER DEFAULT 0,
                 twofa_secret TEXT,
                 language TEXT DEFAULT 'en',
+                theme TEXT DEFAULT 'light',
                 failed_login_attempts INTEGER DEFAULT 0,
                 locked_until TIMESTAMP,
                 last_login TIMESTAMP,
@@ -413,26 +486,16 @@ def init_database():
                 total_marks REAL NOT NULL,
                 timestamp TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                semester TEXT,
-                batch_year TEXT,
-                department TEXT,
-                class_name TEXT,
-                photo_url TEXT,
-                email TEXT,
-                phone TEXT,
-                date_of_birth TEXT,
-                address TEXT
+                semester TEXT, batch_year TEXT, department TEXT, class_name TEXT,
+                photo_url TEXT, email TEXT, phone TEXT, date_of_birth TEXT, address TEXT
             )
         """)
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS attendance (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                student_id INTEGER,
-                date TEXT NOT NULL,
-                status TEXT NOT NULL,
-                subject TEXT,
-                notes TEXT,
+                student_id INTEGER, date TEXT NOT NULL, status TEXT NOT NULL,
+                subject TEXT, notes TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -440,12 +503,8 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS performance_trends (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                student_id INTEGER,
-                semester TEXT,
-                average REAL,
-                grade TEXT,
-                total_marks REAL,
-                timestamp TEXT,
+                student_id INTEGER, semester TEXT, average REAL, grade TEXT,
+                total_marks REAL, timestamp TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -453,21 +512,30 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS notifications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                student_id INTEGER,
-                user_id INTEGER,
-                message TEXT,
-                type TEXT,
-                is_read INTEGER DEFAULT 0,
-                email_sent INTEGER DEFAULT 0,
+                student_id INTEGER, user_id INTEGER, message TEXT, type TEXT,
+                is_read INTEGER DEFAULT 0, email_sent INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS notification_preferences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE,
+                email_on_grade INTEGER DEFAULT 1,
+                email_on_attendance INTEGER DEFAULT 1,
+                email_on_fee INTEGER DEFAULT 1,
+                email_on_assignment INTEGER DEFAULT 1,
+                email_on_report INTEGER DEFAULT 0,
+                inapp_on_all INTEGER DEFAULT 1,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS parent_children (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                parent_user_id INTEGER NOT NULL,
-                student_id INTEGER NOT NULL,
+                parent_user_id INTEGER NOT NULL, student_id INTEGER NOT NULL,
                 relationship TEXT DEFAULT 'parent',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(parent_user_id, student_id)
@@ -477,8 +545,7 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS token_blacklist (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                token_hash TEXT UNIQUE NOT NULL,
-                expires_at TIMESTAMP NOT NULL,
+                token_hash TEXT UNIQUE NOT NULL, expires_at TIMESTAMP NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -486,11 +553,8 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS login_attempts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT,
-                ip_address TEXT,
-                user_agent TEXT,
-                success INTEGER,
-                reason TEXT,
+                username TEXT, ip_address TEXT, user_agent TEXT,
+                success INTEGER, reason TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -498,12 +562,8 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                username TEXT,
-                action TEXT NOT NULL,
-                resource TEXT,
-                details TEXT,
-                ip_address TEXT,
+                user_id INTEGER, username TEXT, action TEXT NOT NULL,
+                resource TEXT, details TEXT, ip_address TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -511,12 +571,9 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS role_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                username TEXT NOT NULL,
-                old_role TEXT NOT NULL,
-                new_role TEXT NOT NULL,
-                changed_by INTEGER,
-                changed_by_username TEXT,
+                user_id INTEGER NOT NULL, username TEXT NOT NULL,
+                old_role TEXT NOT NULL, new_role TEXT NOT NULL,
+                changed_by INTEGER, changed_by_username TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -524,9 +581,7 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS classes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                department TEXT,
-                teacher_id INTEGER,
+                name TEXT UNIQUE NOT NULL, department TEXT, teacher_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -534,12 +589,8 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS email_queue (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                to_email TEXT NOT NULL,
-                subject TEXT NOT NULL,
-                html_body TEXT NOT NULL,
-                sent INTEGER DEFAULT 0,
-                attempts INTEGER DEFAULT 0,
-                error TEXT,
+                to_email TEXT NOT NULL, subject TEXT NOT NULL, html_body TEXT NOT NULL,
+                sent INTEGER DEFAULT 0, attempts INTEGER DEFAULT 0, error TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -547,15 +598,9 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS exams (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                class_name TEXT,
-                subject TEXT,
-                exam_date TEXT NOT NULL,
-                start_time TEXT,
-                end_time TEXT,
-                total_marks INTEGER DEFAULT 100,
-                room TEXT,
-                notes TEXT,
+                name TEXT NOT NULL, class_name TEXT, subject TEXT,
+                exam_date TEXT NOT NULL, start_time TEXT, end_time TEXT,
+                total_marks INTEGER DEFAULT 100, room TEXT, notes TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -563,14 +608,9 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS timetable (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                class_name TEXT NOT NULL,
-                day_of_week TEXT NOT NULL,
-                period INTEGER,
-                subject TEXT NOT NULL,
-                teacher_name TEXT,
-                room TEXT,
-                start_time TEXT,
-                end_time TEXT,
+                class_name TEXT NOT NULL, day_of_week TEXT NOT NULL,
+                period INTEGER, subject TEXT NOT NULL, teacher_name TEXT,
+                room TEXT, start_time TEXT, end_time TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -578,12 +618,8 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS assignments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                description TEXT,
-                class_name TEXT,
-                subject TEXT,
-                due_date TEXT NOT NULL,
-                total_marks INTEGER DEFAULT 100,
+                title TEXT NOT NULL, description TEXT, class_name TEXT,
+                subject TEXT, due_date TEXT NOT NULL, total_marks INTEGER DEFAULT 100,
                 created_by INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -592,13 +628,9 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS assignment_submissions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                assignment_id INTEGER NOT NULL,
-                student_id INTEGER NOT NULL,
-                submitted_at TEXT,
-                status TEXT DEFAULT 'pending',
-                marks_obtained REAL,
-                feedback TEXT,
-                file_url TEXT,
+                assignment_id INTEGER NOT NULL, student_id INTEGER NOT NULL,
+                submitted_at TEXT, status TEXT DEFAULT 'pending',
+                marks_obtained REAL, feedback TEXT, file_url TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(assignment_id, student_id)
             )
@@ -607,10 +639,8 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS fee_structures (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                class_name TEXT NOT NULL,
-                fee_type TEXT NOT NULL,
-                amount REAL NOT NULL,
-                frequency TEXT DEFAULT 'monthly',
+                class_name TEXT NOT NULL, fee_type TEXT NOT NULL,
+                amount REAL NOT NULL, frequency TEXT DEFAULT 'monthly',
                 academic_year TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -619,15 +649,10 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS fee_payments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                student_id INTEGER NOT NULL,
-                fee_type TEXT NOT NULL,
-                amount REAL NOT NULL,
-                payment_date TEXT NOT NULL,
-                payment_method TEXT DEFAULT 'cash',
-                transaction_id TEXT,
-                status TEXT DEFAULT 'paid',
-                due_date TEXT,
-                notes TEXT,
+                student_id INTEGER NOT NULL, fee_type TEXT NOT NULL,
+                amount REAL NOT NULL, payment_date TEXT NOT NULL,
+                payment_method TEXT DEFAULT 'cash', transaction_id TEXT,
+                status TEXT DEFAULT 'paid', due_date TEXT, notes TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -635,10 +660,8 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS saved_filters (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                entity TEXT NOT NULL,
-                filter_json TEXT NOT NULL,
+                user_id INTEGER NOT NULL, name TEXT NOT NULL,
+                entity TEXT NOT NULL, filter_json TEXT NOT NULL,
                 is_shared INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -647,10 +670,8 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS backup_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                filename TEXT NOT NULL,
-                size_bytes INTEGER,
-                backup_type TEXT DEFAULT 'manual',
-                created_by INTEGER,
+                filename TEXT NOT NULL, size_bytes INTEGER,
+                backup_type TEXT DEFAULT 'manual', created_by INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -658,10 +679,8 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS scheduled_reports (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                report_type TEXT NOT NULL,
-                recipients TEXT NOT NULL,
-                schedule TEXT NOT NULL,
-                last_sent TIMESTAMP,
+                report_type TEXT NOT NULL, recipients TEXT NOT NULL,
+                schedule TEXT NOT NULL, last_sent TIMESTAMP,
                 enabled INTEGER DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -670,40 +689,34 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS live_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                event_type TEXT NOT NULL,
+                user_id INTEGER, event_type TEXT NOT NULL,
                 payload TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
-        # Default admin
+        # Default admins for SQLite
         cursor.execute("SELECT COUNT(*) as count FROM users")
         if cursor.fetchone()["count"] == 0:
             default_hash = get_password_hash("Admin@123")
             cursor.execute("""
                 INSERT INTO users (username, email, hashed_password, full_name, role,
-                                   email_verified, phone_verified)
-                VALUES (?, ?, ?, ?, ?, 1, 1)
+                                   email_verified, phone_verified, theme)
+                VALUES (?, ?, ?, ?, ?, 1, 1, 'light')
             """, ("admin", "admin@example.com", default_hash, "Default Admin", "admin"))
-            print("[OK] Default admin created - admin / Admin@123")
+            print("[OK] Default admin created")
 
         cursor.execute("SELECT id FROM users WHERE username = 'admin2'")
         if not cursor.fetchone():
             backup_hash = get_password_hash("Admin2@123")
             cursor.execute("""
                 INSERT INTO users (username, email, hashed_password, full_name, role,
-                                   email_verified, phone_verified)
-                VALUES (?, ?, ?, ?, ?, 1, 1)
+                                   email_verified, phone_verified, theme)
+                VALUES (?, ?, ?, ?, ?, 1, 1, 'light')
             """, ("admin2", "admin2@example.com", backup_hash, "Backup Admin", "admin"))
-            print("[OK] Backup admin created - admin2 / Admin2@123")
+            print("[OK] Backup admin created")
 
-        cursor.execute("""
-            UPDATE users SET role='admin', is_active=1, email_verified=1,
-                             failed_login_attempts=0, locked_until=NULL
-            WHERE username IN ('admin', 'admin2')
-        """)
-
+        # Indexes
         for idx in [
             "CREATE INDEX IF NOT EXISTS idx_user_username ON users(username)",
             "CREATE INDEX IF NOT EXISTS idx_user_email ON users(email)",
@@ -721,14 +734,14 @@ def init_database():
                 pass
 
         conn.commit()
-        print("[OK] Database initialized")
+        print("[OK] Database initialized (SQLite)")
 
 
 init_database()
 
 
 # ============================================================
-# MODELS (in main.py, existing)
+# PYDANTIC MODELS
 # ============================================================
 class UserRegister(BaseModel):
     username: str = Field(..., min_length=3, max_length=30)
@@ -796,15 +809,6 @@ class MarksRequest(BaseModel):
             raise ValueError("Marks must be 0-100")
         return v
 
-    @validator("subject_names")
-    def v_subjects(cls, v):
-        if v:
-            for name in v:
-                ok, err = validate_subject_name(name)
-                if not ok:
-                    raise ValueError(f"Invalid subject '{name}': {err}")
-        return v
-
 
 class StudentRecord(BaseModel):
     name: str
@@ -818,14 +822,6 @@ class StudentRecord(BaseModel):
     batch_year: Optional[str] = None
     department: Optional[str] = None
     class_name: Optional[str] = None
-
-    @validator("subjects")
-    def v_sub(cls, v):
-        for name in v:
-            ok, err = validate_subject_name(name)
-            if not ok:
-                raise ValueError(f"Invalid subject '{name}': {err}")
-        return v
 
 
 class AttendanceRecord(BaseModel):
@@ -893,6 +889,21 @@ class TOTPVerify(BaseModel):
     code: str
 
 
+# FEATURE 1: Theme
+class ThemeUpdate(BaseModel):
+    theme: str
+
+
+# FEATURE 2: Notification Preferences
+class NotificationPreferences(BaseModel):
+    email_on_grade: bool = True
+    email_on_attendance: bool = True
+    email_on_fee: bool = True
+    email_on_assignment: bool = True
+    email_on_report: bool = False
+    inapp_on_all: bool = True
+
+
 # ============================================================
 # HELPERS
 # ============================================================
@@ -906,72 +917,75 @@ def blacklist_token(token: str, expires_at: datetime):
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT OR IGNORE INTO token_blacklist (token_hash, expires_at) VALUES (?, ?)",
+                _q("INSERT OR IGNORE INTO token_blacklist (token_hash, expires_at) VALUES (?, ?)"),
                 (hash_token(token), expires_at.isoformat()),
             )
             conn.commit()
     except Exception:
-        pass
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    _q("INSERT INTO token_blacklist (token_hash, expires_at) VALUES (?, ?) ON CONFLICT DO NOTHING"),
+                    (hash_token(token), expires_at.isoformat()),
+                )
+                conn.commit()
+        except Exception:
+            pass
 
 
 def is_token_blacklisted(token: str) -> bool:
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id FROM token_blacklist WHERE token_hash=?", (hash_token(token),))
+            cursor.execute(_q("SELECT id FROM token_blacklist WHERE token_hash=?"), (hash_token(token),))
             return cursor.fetchone() is not None
     except Exception:
         return False
 
 
 def log_audit(user_id, username, action, resource=None, details=None, ip=None, conn=None):
-    if conn is not None:
-        try:
+    try:
+        if conn is not None:
             cursor = conn.cursor()
             cursor.execute(
-                """INSERT INTO audit_log (user_id, username, action, resource, details, ip_address)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                _q("""INSERT INTO audit_log (user_id, username, action, resource, details, ip_address)
+                   VALUES (?, ?, ?, ?, ?, ?)"""),
                 (user_id, username, action, resource, details, ip),
             )
             conn.commit()
-        except Exception:
-            pass
-        return
-    try:
-        with get_db_connection() as c:
-            cursor = c.cursor()
-            cursor.execute(
-                """INSERT INTO audit_log (user_id, username, action, resource, details, ip_address)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (user_id, username, action, resource, details, ip),
-            )
-            c.commit()
+        else:
+            with get_db_connection() as c:
+                cursor = c.cursor()
+                cursor.execute(
+                    _q("""INSERT INTO audit_log (user_id, username, action, resource, details, ip_address)
+                       VALUES (?, ?, ?, ?, ?, ?)"""),
+                    (user_id, username, action, resource, details, ip),
+                )
+                c.commit()
     except Exception:
         pass
 
 
 def log_login_attempt(username, ip, ua, success, reason="", conn=None):
-    if conn is not None:
-        try:
+    try:
+        if conn is not None:
             cursor = conn.cursor()
             cursor.execute(
-                """INSERT INTO login_attempts (username, ip_address, user_agent, success, reason)
-                   VALUES (?, ?, ?, ?, ?)""",
+                _q("""INSERT INTO login_attempts (username, ip_address, user_agent, success, reason)
+                   VALUES (?, ?, ?, ?, ?)"""),
                 (username, ip, (ua or "")[:200], 1 if success else 0, reason),
             )
             conn.commit()
-        except Exception:
-            pass
-        return
-    try:
-        with get_db_connection() as c:
-            cursor = c.cursor()
-            cursor.execute(
-                """INSERT INTO login_attempts (username, ip_address, user_agent, success, reason)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (username, ip, (ua or "")[:200], 1 if success else 0, reason),
-            )
-            c.commit()
+        else:
+            with get_db_connection() as c:
+                cursor = c.cursor()
+                cursor.execute(
+                    _q("""INSERT INTO login_attempts (username, ip_address, user_agent, success, reason)
+                       VALUES (?, ?, ?, ?, ?)"""),
+                    (username, ip, (ua or "")[:200], 1 if success else 0, reason),
+                )
+                c.commit()
     except Exception:
         pass
 
@@ -980,20 +994,20 @@ def check_account_locked(username, conn=None):
     try:
         if conn is not None:
             cursor = conn.cursor()
-            cursor.execute("SELECT locked_until FROM users WHERE username=?", (username,))
+            cursor.execute(_q("SELECT locked_until FROM users WHERE username=?"), (username,))
             row = cursor.fetchone()
         else:
             with get_db_connection() as c:
                 cursor = c.cursor()
-                cursor.execute("SELECT locked_until FROM users WHERE username=?", (username,))
+                cursor.execute(_q("SELECT locked_until FROM users WHERE username=?"), (username,))
                 row = cursor.fetchone()
         if row and row["locked_until"]:
             try:
-                lu = datetime.fromisoformat(row["locked_until"])
+                lu = datetime.fromisoformat(str(row["locked_until"]))
                 if datetime.utcnow() < lu:
                     mins = int((lu - datetime.utcnow()).total_seconds() / 60) + 1
                     return f"Account locked. Try again in {mins} minute(s)."
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
     except Exception:
         pass
@@ -1001,58 +1015,51 @@ def check_account_locked(username, conn=None):
 
 
 def increment_failed_attempts(username, conn=None):
-    if conn is not None:
-        _do_increment(conn, username)
-        return
-    with get_db_connection() as c:
-        _do_increment(c, username)
-
-
-def _do_increment(conn, username):
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT failed_login_attempts FROM users WHERE username=?", (username,))
-        row = cursor.fetchone()
-        if not row:
-            return
-        attempts = (row["failed_login_attempts"] or 0) + 1
-        if attempts >= MAX_FAILED_ATTEMPTS:
-            lu = (datetime.utcnow() + timedelta(minutes=LOCKOUT_DURATION_MINUTES)).isoformat()
-            cursor.execute(
-                "UPDATE users SET failed_login_attempts=?, locked_until=? WHERE username=?",
-                (attempts, lu, username),
-            )
-        else:
-            cursor.execute(
-                "UPDATE users SET failed_login_attempts=? WHERE username=?",
-                (attempts, username),
-            )
-        conn.commit()
+        if conn is not None:
+            cursor = conn.cursor()
+            cursor.execute(_q("SELECT failed_login_attempts FROM users WHERE username=?"), (username,))
+            row = cursor.fetchone()
+            if not row:
+                return
+            attempts = (row["failed_login_attempts"] or 0) + 1
+            if attempts >= MAX_FAILED_ATTEMPTS:
+                lu = (datetime.utcnow() + timedelta(minutes=LOCKOUT_DURATION_MINUTES)).isoformat()
+                cursor.execute(
+                    _q("UPDATE users SET failed_login_attempts=?, locked_until=? WHERE username=?"),
+                    (attempts, lu, username),
+                )
+            else:
+                cursor.execute(
+                    _q("UPDATE users SET failed_login_attempts=? WHERE username=?"),
+                    (attempts, username),
+                )
+            conn.commit()
     except Exception:
         pass
 
 
 def reset_failed_attempts(username, conn=None):
-    if conn is not None:
-        try:
+    try:
+        if conn is not None:
             cursor = conn.cursor()
             cursor.execute(
-                """UPDATE users SET failed_login_attempts=0, locked_until=NULL, last_login=?
-                   WHERE username=?""",
+                _q("""UPDATE users SET failed_login_attempts=0, locked_until=NULL, last_login=?
+                   WHERE username=?"""),
                 (datetime.utcnow().isoformat(), username),
             )
             conn.commit()
-        except Exception:
-            pass
-        return
-    with get_db_connection() as c:
-        cursor = c.cursor()
-        cursor.execute(
-            """UPDATE users SET failed_login_attempts=0, locked_until=NULL, last_login=?
-               WHERE username=?""",
-            (datetime.utcnow().isoformat(), username),
-        )
-        c.commit()
+        else:
+            with get_db_connection() as c:
+                cursor = c.cursor()
+                cursor.execute(
+                    _q("""UPDATE users SET failed_login_attempts=0, locked_until=NULL, last_login=?
+                       WHERE username=?"""),
+                    (datetime.utcnow().isoformat(), username),
+                )
+                c.commit()
+    except Exception:
+        pass
 
 
 def save_otp(identifier, otp, purpose):
@@ -1060,12 +1067,12 @@ def save_otp(identifier, otp, purpose):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE otp_codes SET used=1 WHERE identifier=? AND purpose=? AND used=0",
+            _q("UPDATE otp_codes SET used=1 WHERE identifier=? AND purpose=? AND used=0"),
             (identifier, purpose),
         )
         cursor.execute(
-            """INSERT INTO otp_codes (identifier, otp_code, purpose, expires_at)
-               VALUES (?, ?, ?, ?)""",
+            _q("""INSERT INTO otp_codes (identifier, otp_code, purpose, expires_at)
+               VALUES (?, ?, ?, ?)"""),
             (identifier, otp, purpose, expires),
         )
         conn.commit()
@@ -1075,9 +1082,9 @@ def verify_otp(identifier, otp, purpose):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            """SELECT * FROM otp_codes
+            _q("""SELECT * FROM otp_codes
                WHERE identifier=? AND purpose=? AND used=0
-               ORDER BY created_at DESC LIMIT 1""",
+               ORDER BY created_at DESC LIMIT 1"""),
             (identifier, purpose),
         )
         row = cursor.fetchone()
@@ -1086,12 +1093,12 @@ def verify_otp(identifier, otp, purpose):
         if row["otp_code"] != otp:
             return False, "Incorrect OTP"
         try:
-            exp = datetime.fromisoformat(row["expires_at"])
+            exp = datetime.fromisoformat(str(row["expires_at"]))
             if datetime.utcnow() > exp:
                 return False, "OTP expired. Request a new one."
-        except ValueError:
+        except (ValueError, TypeError):
             pass
-        cursor.execute("UPDATE otp_codes SET used=1 WHERE id=?", (row["id"],))
+        cursor.execute(_q("UPDATE otp_codes SET used=1 WHERE id=?"), (row["id"],))
         conn.commit()
         return True, "OK"
 
@@ -1101,7 +1108,7 @@ def queue_email(to_email: str, subject: str, html_body: str):
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO email_queue (to_email, subject, html_body) VALUES (?, ?, ?)",
+                _q("INSERT INTO email_queue (to_email, subject, html_body) VALUES (?, ?, ?)"),
                 (to_email, subject, html_body),
             )
             conn.commit()
@@ -1140,23 +1147,20 @@ def process_email_queue():
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(_q("""
                 SELECT id, to_email, subject, html_body, attempts
                 FROM email_queue WHERE sent=0 AND attempts < 3
                 ORDER BY created_at ASC LIMIT 10
-            """)
+            """))
             emails = cursor.fetchall()
             for email in emails:
                 success = send_email_notification(
                     email["to_email"], email["subject"], email["html_body"]
                 )
                 if success:
-                    cursor.execute("UPDATE email_queue SET sent=1 WHERE id=?", (email["id"],))
+                    cursor.execute(_q("UPDATE email_queue SET sent=1 WHERE id=?"), (email["id"],))
                 else:
-                    cursor.execute(
-                        "UPDATE email_queue SET attempts=attempts+1 WHERE id=?",
-                        (email["id"],)
-                    )
+                    cursor.execute(_q("UPDATE email_queue SET attempts=attempts+1 WHERE id=?"), (email["id"],))
             conn.commit()
     except Exception as e:
         print(f"Queue processing error: {e}")
@@ -1275,7 +1279,7 @@ def analyze_trends(student_id):
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT * FROM performance_trends WHERE student_id=? ORDER BY created_at ASC",
+                _q("SELECT * FROM performance_trends WHERE student_id=? ORDER BY created_at ASC"),
                 (student_id,),
             )
             trends = [dict(r) for r in cursor.fetchall()]
@@ -1294,11 +1298,11 @@ def analyze_trends(student_id):
 def get_parent_emails_for_student(student_id: int) -> List[str]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(_q("""
             SELECT u.email FROM users u
             JOIN parent_children pc ON u.id = pc.parent_user_id
             WHERE pc.student_id = ? AND u.is_active = 1
-        """, (student_id,))
+        """), (student_id,))
         return [r["email"] for r in cursor.fetchall()]
 
 
@@ -1343,10 +1347,10 @@ def log_live_event(user_id: int, event_type: str, payload: dict):
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(_q("""
                 INSERT INTO live_events (user_id, event_type, payload)
                 VALUES (?, ?, ?)
-            """, (user_id, event_type, json.dumps(payload)))
+            """), (user_id, event_type, json.dumps(payload)))
             conn.commit()
     except Exception:
         pass
@@ -1368,7 +1372,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         return None
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE username=? AND is_active=1", (username,))
+        cursor.execute(_q("SELECT * FROM users WHERE username=? AND is_active=1"), (username,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
@@ -1392,6 +1396,177 @@ def require_role(*roles):
             raise HTTPException(403, f"Requires role: {', '.join(roles)}")
         return user
     return checker
+
+
+# ============================================================
+# ML MODULE IMPORT
+# ============================================================
+try:
+    from ml_models import (
+        is_available as ml_available,
+        is_trained as ml_trained,
+        get_meta as ml_meta,
+        train_model as ml_train,
+        predict_grade as ml_predict_grade,
+        predict_risk as ml_predict_risk,
+        generate_recommendations as ml_recommendations,
+    )
+except Exception as _ml_err:
+    print(f"[WARN] ML module not loaded: {_ml_err}")
+    def ml_available(): return False
+    def ml_trained(): return False
+    def ml_meta(): return {}
+    def ml_train(x): return {"error": "ML not available"}
+    def ml_predict_grade(x): return {"error": "ML not available"}
+    def ml_predict_risk(x): return {"at_risk": False, "probability": 0.0}
+    def ml_recommendations(x): return []
+
+
+def _student_to_features(student_row):
+    """Convert DB student row to features for ML."""
+    def _parse(v):
+        if v is None: return []
+        if isinstance(v, (list, tuple)): return list(v)
+        try: return json.loads(v)
+        except Exception:
+            try: return [float(x) for x in str(v).split(",") if x.strip()]
+            except Exception: return []
+
+    s = dict(student_row)
+    marks = _parse(s.get("marks"))
+    subjects = _parse(s.get("subjects"))
+
+    attendance_rate = 1.0
+    try:
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(_q("SELECT COUNT(*) as t FROM attendance WHERE student_id=?"), (s["id"],))
+            total = cur.fetchone()["t"]
+            if total > 0:
+                cur.execute(_q("SELECT COUNT(*) as p FROM attendance WHERE student_id=? AND status='Present'"), (s["id"],))
+                present = cur.fetchone()["p"]
+                attendance_rate = present / total
+    except Exception:
+        pass
+
+    assignment_rate = 1.0
+    try:
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(_q("SELECT COUNT(*) as t FROM assignment_submissions WHERE student_id=?"), (s["id"],))
+            total = cur.fetchone()["t"]
+            if total > 0:
+                cur.execute(_q("""SELECT COUNT(*) as g FROM assignment_submissions
+                       WHERE student_id=? AND status IN ('submitted', 'graded')"""), (s["id"],))
+                submitted = cur.fetchone()["g"]
+                assignment_rate = submitted / total
+    except Exception:
+        pass
+
+    return {
+        "marks": marks,
+        "subjects": subjects,
+        "attendance_rate": attendance_rate,
+        "assignment_rate": assignment_rate,
+    }
+
+
+# ============================================================
+# ML ENDPOINTS
+# ============================================================
+@app.get("/ml/status")
+def ml_status(user=Depends(require_user)):
+    return {"available": ml_available(), "trained": ml_trained(), "meta": ml_meta()}
+
+
+@app.post("/ml/train")
+def ml_train_endpoint(user=Depends(require_role("admin", "teacher"))):
+    try:
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(_q("SELECT * FROM students WHERE marks IS NOT NULL AND marks != ''"))
+            rows = [dict(r) for r in cur.fetchall()]
+    except Exception as e:
+        raise HTTPException(500, f"DB error: {e}")
+
+    training_data = [_student_to_features(r) for r in rows]
+    training_data = [t for t in training_data if t["marks"]]
+
+    if len(training_data) < 5:
+        return {"ok": False,
+                "error": f"Need at least 5 students with marks. Currently: {len(training_data)}",
+                "hint": "Add more students with marks via the Analyze page, then retry."}
+
+    result = ml_train(training_data)
+    if result.get("ok"):
+        log_live_event(user["id"], "ml_trained", {
+            "samples": result.get("samples"), "r2": result.get("grade_r2"),
+        })
+    return result
+
+
+@app.get("/ml/predict/{student_id}")
+def ml_predict(student_id: int, user=Depends(require_user)):
+    if not any(s["id"] == student_id for s in get_accessible_students(user)):
+        raise HTTPException(403, "Access denied")
+    try:
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(_q("SELECT * FROM students WHERE id=?"), (student_id,))
+            row = cur.fetchone()
+    except Exception as e:
+        raise HTTPException(500, f"DB error: {e}")
+    if not row:
+        raise HTTPException(404, "Student not found")
+    features = _student_to_features(row)
+    return {
+        "student_id": student_id,
+        "student_name": row["name"],
+        "prediction": ml_predict_grade(features),
+        "risk": ml_predict_risk(features),
+        "recommendations": ml_recommendations(features),
+    }
+
+
+@app.get("/ml/at-risk")
+def ml_at_risk(user=Depends(require_user)):
+    students = get_accessible_students(user)
+    at_risk = []
+    for r in students:
+        features = _student_to_features(r)
+        if not features["marks"]:
+            continue
+        risk = ml_predict_risk(features)
+        if risk["at_risk"]:
+            at_risk.append({
+                "id": r["id"], "name": r["name"],
+                "grade": r.get("grade", "N/A"), "average": r.get("average", 0),
+                "probability": risk["probability"],
+            })
+    at_risk.sort(key=lambda x: x["probability"], reverse=True)
+    return {"count": len(at_risk), "students": at_risk}
+
+
+@app.get("/ml/recommendations/{student_id}")
+def ml_get_recommendations(student_id: int, user=Depends(require_user)):
+    if not any(s["id"] == student_id for s in get_accessible_students(user)):
+        raise HTTPException(403, "Access denied")
+    try:
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(_q("SELECT * FROM students WHERE id=?"), (student_id,))
+            row = cur.fetchone()
+    except Exception as e:
+        raise HTTPException(500, f"DB error: {e}")
+    if not row:
+        raise HTTPException(404, "Student not found")
+    return {
+        "student_id": student_id,
+        "student_name": row["name"],
+        "recommendations": ml_recommendations(_student_to_features(row)),
+    }
+
+
 # ============================================================
 # AUTH ENDPOINTS
 # ============================================================
@@ -1417,22 +1592,21 @@ def register_user(request: Request, user: UserRegister, background_tasks: Backgr
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id FROM users WHERE username=? OR email=?",
-            (user.username, user.email.lower()),
-        )
+        cursor.execute(_q("SELECT id FROM users WHERE username=? OR email=?"),
+                       (user.username, user.email.lower()))
         if cursor.fetchone():
             raise HTTPException(400, "Username or email already exists")
 
         hashed = get_password_hash(user.password)
-        cursor.execute(
-            """INSERT INTO users (username, email, phone, hashed_password, full_name,
-                                  role, email_verified, phone_verified)
-               VALUES (?, ?, ?, ?, ?, ?, 0, 0)""",
+        cursor.execute(_q("""INSERT INTO users (username, email, phone, hashed_password, full_name,
+                                  role, email_verified, phone_verified, theme)
+               VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'light')"""),
             (user.username, user.email.lower(), phone_clean, hashed,
-             user.full_name or user.username, user.role),
-        )
-        user_id = cursor.lastrowid
+             user.full_name or user.username, user.role))
+        user_id = cursor.lastrowid if not USE_POSTGRES else None
+        if USE_POSTGRES:
+            cursor.execute(_q("SELECT id FROM users WHERE username=?"), (user.username,))
+            user_id = cursor.fetchone()["id"]
         conn.commit()
 
     otp = generate_otp()
@@ -1442,7 +1616,7 @@ def register_user(request: Request, user: UserRegister, background_tasks: Backgr
     if not sent:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM users WHERE id=?", (user_id,))
+            cursor.execute(_q("DELETE FROM users WHERE id=?"), (user_id,))
             conn.commit()
         raise HTTPException(500, "Could not send verification email.")
 
@@ -1454,8 +1628,7 @@ def register_user(request: Request, user: UserRegister, background_tasks: Backgr
     background_tasks.add_task(send_welcome_email, user.email.lower(), user.username, user.role)
 
     log_audit(user_id, user.username, "register", "user",
-              f"Role: {user.role}",
-              request.client.host if request.client else None)
+              f"Role: {user.role}", request.client.host if request.client else None)
 
     return {
         "message": "Registration successful. Check your email for the verification code.",
@@ -1477,7 +1650,7 @@ def resend_otp(request: Request, data: ResendOTPRequest):
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, email_verified FROM users WHERE email=?", (email,))
+        cursor.execute(_q("SELECT id, email_verified FROM users WHERE email=?"), (email,))
         user = cursor.fetchone()
 
     if not user:
@@ -1488,10 +1661,8 @@ def resend_otp(request: Request, data: ResendOTPRequest):
     otp = generate_otp()
     save_otp(email, otp, "verification")
     sent = send_email_otp(email, otp, "verification")
-
     if not sent:
         raise HTTPException(500, "Could not send OTP")
-
     return {"message": "OTP sent to your email", "delivery": "email"}
 
 
@@ -1504,16 +1675,13 @@ def verify_otp_endpoint(data: OTPVerify):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         if data.purpose == "verification":
-            cursor.execute(
-                "UPDATE users SET email_verified=1 WHERE email=?",
-                (data.identifier.strip().lower(),),
-            )
+            cursor.execute(_q("UPDATE users SET email_verified=1 WHERE email=?"),
+                           (data.identifier.strip().lower(),))
         elif data.purpose == "phone_verification":
             ok_p, phone = validate_phone(data.identifier)
             if ok_p:
-                cursor.execute("UPDATE users SET phone_verified=1 WHERE phone=?", (phone,))
+                cursor.execute(_q("UPDATE users SET phone_verified=1 WHERE phone=?"), (phone,))
         conn.commit()
-
     return {"message": "Verification successful", "verified": True}
 
 
@@ -1523,7 +1691,6 @@ def login(request: Request, username: str = "", password: str = "",
           email: str = "", pwd: str = "", totp_code: str = ""):
     ip = request.client.host if request.client else "unknown"
     ua = request.headers.get("user-agent", "")
-
     identifier = (username or email or "").strip().lower()
     pwd_value = password or pwd or ""
 
@@ -1537,10 +1704,8 @@ def login(request: Request, username: str = "", password: str = "",
             raise HTTPException(423, lock_msg)
 
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM users WHERE username=? OR email=?",
-            (identifier, identifier),
-        )
+        cursor.execute(_q("SELECT * FROM users WHERE username=? OR email=?"),
+                       (identifier, identifier))
         user = cursor.fetchone()
 
         if not user:
@@ -1592,6 +1757,7 @@ def login(request: Request, username: str = "", password: str = "",
             "full_name": user.get("full_name"),
             "role": user["role"],
             "language": user.get("language", "en"),
+            "theme": user.get("theme", "light"),
             "email_verified": bool(user.get("email_verified")),
             "phone_verified": bool(user.get("phone_verified")),
             "twofa_enabled": bool(user.get("twofa_enabled")),
@@ -1603,13 +1769,10 @@ def login(request: Request, username: str = "", password: str = "",
 @limiter.limit("5/minute")
 def send_otp(request: Request, data: OTPRequest):
     identifier = data.identifier.strip().lower()
-
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM users WHERE email=? OR phone=?",
-            (identifier, data.identifier.strip()),
-        )
+        cursor.execute(_q("SELECT * FROM users WHERE email=? OR phone=?"),
+                       (identifier, data.identifier.strip()))
         user = cursor.fetchone()
 
     if not user and data.purpose == "reset_password":
@@ -1638,19 +1801,12 @@ def send_whatsapp_otp_endpoint(request: Request, data: WhatsAppOTPRequest):
     ok, phone = validate_phone(data.phone)
     if not ok:
         raise HTTPException(400, phone)
-
     otp = generate_otp()
     save_otp(phone, otp, data.purpose)
     sent = send_whatsapp_otp(phone, otp)
-
     if not sent:
         raise HTTPException(500, "WhatsApp sending failed. Check Twilio configuration.")
-
-    return {
-        "message": "OTP sent via WhatsApp",
-        "delivery": "whatsapp",
-        "phone": phone,
-    }
+    return {"message": "OTP sent via WhatsApp", "delivery": "whatsapp", "phone": phone}
 
 
 @app.post("/auth/reset-password")
@@ -1668,14 +1824,11 @@ def reset_password(request: Request, data: PasswordResetOTP):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            """UPDATE users SET hashed_password=?, failed_login_attempts=0, locked_until=NULL
-               WHERE email=? OR phone=?""",
+            _q("""UPDATE users SET hashed_password=?, failed_login_attempts=0, locked_until=NULL
+               WHERE email=? OR phone=?"""),
             (hashed, data.identifier.strip().lower(), data.identifier.strip()),
         )
-        if cursor.rowcount == 0:
-            raise HTTPException(404, "User not found")
         conn.commit()
-
     return {"message": "Password reset successfully. Please log in."}
 
 
@@ -1684,8 +1837,8 @@ def get_me(user=Depends(require_user)):
     return {
         "id": user["id"], "username": user["username"], "email": user["email"],
         "phone": user.get("phone"), "full_name": user.get("full_name"),
-        "role": user["role"],
-        "language": user.get("language", "en"),
+        "role": user["role"], "language": user.get("language", "en"),
+        "theme": user.get("theme", "light"),
         "email_verified": bool(user.get("email_verified")),
         "phone_verified": bool(user.get("phone_verified")),
         "twofa_enabled": bool(user.get("twofa_enabled")),
@@ -1704,7 +1857,7 @@ def change_password(data: PasswordChange, user=Depends(require_user)):
     new_hash = get_password_hash(data.new_password)
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE users SET hashed_password=? WHERE id=?", (new_hash, user["id"]))
+        cursor.execute(_q("UPDATE users SET hashed_password=? WHERE id=?"), (new_hash, user["id"]))
         conn.commit()
     return {"message": "Password changed successfully"}
 
@@ -1734,6 +1887,18 @@ def check_strength(password: str = Query(..., min_length=1)):
     return {"score": score, "label": label, "valid": valid, "error": err}
 
 
+# FEATURE 1: Theme update
+@app.put("/auth/theme")
+def update_theme(data: ThemeUpdate, user=Depends(require_user)):
+    if data.theme not in ["light", "dark"]:
+        raise HTTPException(400, "Supported: light, dark")
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(_q("UPDATE users SET theme=? WHERE id=?"), (data.theme, user["id"]))
+        conn.commit()
+    return {"message": "Theme updated", "theme": data.theme}
+
+
 # ============================================================
 # 2FA
 # ============================================================
@@ -1743,7 +1908,6 @@ def setup_2fa(user=Depends(require_user)):
     totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(
         name=user["email"], issuer_name=TOTP_ISSUER
     )
-
     img = qrcode.make(totp_uri)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -1752,30 +1916,23 @@ def setup_2fa(user=Depends(require_user)):
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE users SET twofa_secret=? WHERE id=?", (secret, user["id"]))
+        cursor.execute(_q("UPDATE users SET twofa_secret=? WHERE id=?"), (secret, user["id"]))
         conn.commit()
 
-    return {
-        "secret": secret,
-        "qr_code": f"data:image/png;base64,{qr_b64}",
-        "uri": totp_uri,
-    }
+    return {"secret": secret, "qr_code": f"data:image/png;base64,{qr_b64}", "uri": totp_uri}
 
 
 @app.post("/auth/2fa/verify")
 def verify_2fa(data: TOTPVerify, user=Depends(require_user)):
     if not user.get("twofa_secret"):
         raise HTTPException(400, "Call /auth/2fa/setup first")
-
     totp = pyotp.TOTP(user["twofa_secret"])
     if not totp.verify(data.code, valid_window=1):
         raise HTTPException(400, "Invalid code")
-
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE users SET twofa_enabled=1 WHERE id=?", (user["id"],))
+        cursor.execute(_q("UPDATE users SET twofa_enabled=1 WHERE id=?"), (user["id"],))
         conn.commit()
-
     return {"message": "2FA enabled successfully", "enabled": True}
 
 
@@ -1783,19 +1940,13 @@ def verify_2fa(data: TOTPVerify, user=Depends(require_user)):
 def disable_2fa(data: TOTPVerify, user=Depends(require_user)):
     if not user.get("twofa_enabled"):
         raise HTTPException(400, "2FA not enabled")
-
     totp = pyotp.TOTP(user["twofa_secret"])
     if not totp.verify(data.code, valid_window=1):
         raise HTTPException(400, "Invalid code")
-
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE users SET twofa_enabled=0, twofa_secret=NULL WHERE id=?",
-            (user["id"],)
-        )
+        cursor.execute(_q("UPDATE users SET twofa_enabled=0, twofa_secret=NULL WHERE id=?"), (user["id"],))
         conn.commit()
-
     return {"message": "2FA disabled", "enabled": False}
 
 
@@ -1808,7 +1959,7 @@ def list_users(admin=Depends(require_admin)):
         cursor = conn.cursor()
         cursor.execute("""
             SELECT id, username, email, phone, full_name, role, is_active,
-                   email_verified, phone_verified, twofa_enabled, language,
+                   email_verified, phone_verified, twofa_enabled, language, theme,
                    last_login, created_at
             FROM users ORDER BY id
         """)
@@ -1819,21 +1970,17 @@ def list_users(admin=Depends(require_admin)):
 def toggle_user(request: Request, user_id: int, admin=Depends(require_admin)):
     if user_id == admin["id"]:
         raise HTTPException(400, "You cannot disable your own account.")
-
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT is_active, username FROM users WHERE id=?", (user_id,))
+        cursor.execute(_q("SELECT is_active, username FROM users WHERE id=?"), (user_id,))
         row = cursor.fetchone()
         if not row:
             raise HTTPException(404, "User not found")
-
         new_status = 0 if row["is_active"] else 1
-        cursor.execute("UPDATE users SET is_active=? WHERE id=?", (new_status, user_id))
+        cursor.execute(_q("UPDATE users SET is_active=? WHERE id=?"), (new_status, user_id))
         conn.commit()
-
     log_audit(admin["id"], admin["username"], "toggle_user", f"user:{user_id}",
-              f"new_status={new_status}",
-              request.client.host if request.client else None)
+              f"new_status={new_status}", request.client.host if request.client else None)
     return {"message": "Toggled", "user_id": user_id, "is_active": new_status}
 
 
@@ -1843,34 +1990,28 @@ def change_role(request: Request, user_id: int, data: RoleChangeRequest,
     role = data.role
     if role not in ["admin", "teacher", "student", "parent"]:
         raise HTTPException(400, "Invalid role")
-
     if user_id == admin["id"] and role != "admin":
-        raise HTTPException(400, "You cannot demote yourself. Ask another admin.")
+        raise HTTPException(400, "You cannot demote yourself.")
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT username, role FROM users WHERE id=?", (user_id,))
+        cursor.execute(_q("SELECT username, role FROM users WHERE id=?"), (user_id,))
         row = cursor.fetchone()
         if not row:
             raise HTTPException(404, "User not found")
-
         old_role = row["role"]
         username = row["username"]
         if old_role == role:
             raise HTTPException(400, f"Already has role '{role}'")
-
-        cursor.execute("UPDATE users SET role=? WHERE id=?", (role, user_id))
-        cursor.execute("""
-            INSERT INTO role_history (user_id, username, old_role, new_role,
+        cursor.execute(_q("UPDATE users SET role=? WHERE id=?"), (role, user_id))
+        cursor.execute(_q("""INSERT INTO role_history (user_id, username, old_role, new_role,
                                       changed_by, changed_by_username)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (user_id, username, old_role, role, admin["id"], admin["username"]))
+            VALUES (?, ?, ?, ?, ?, ?)"""),
+            (user_id, username, old_role, role, admin["id"], admin["username"]))
         conn.commit()
 
     log_audit(admin["id"], admin["username"], "change_role", f"user:{user_id}",
-              f"{old_role} -> {role}",
-              request.client.host if request.client else None)
-
+              f"{old_role} -> {role}", request.client.host if request.client else None)
     return {"message": f"Role changed: {old_role} -> {role}",
             "user_id": user_id, "old_role": old_role, "new_role": role}
 
@@ -1879,10 +2020,7 @@ def change_role(request: Request, user_id: int, data: RoleChangeRequest,
 def get_role_history(user_id: int, admin=Depends(require_admin)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM role_history WHERE user_id=? ORDER BY created_at DESC LIMIT 50",
-            (user_id,),
-        )
+        cursor.execute(_q("SELECT * FROM role_history WHERE user_id=? ORDER BY created_at DESC LIMIT 50"), (user_id,))
         return {"history": [dict(r) for r in cursor.fetchall()]}
 
 
@@ -1890,35 +2028,26 @@ def get_role_history(user_id: int, admin=Depends(require_admin)):
 def revert_role(request: Request, user_id: int, admin=Depends(require_admin)):
     if user_id == admin["id"]:
         raise HTTPException(400, "You cannot revert your own role.")
-
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT old_role FROM role_history WHERE user_id=? ORDER BY created_at DESC LIMIT 1",
-            (user_id,),
-        )
+        cursor.execute(_q("SELECT old_role FROM role_history WHERE user_id=? ORDER BY created_at DESC LIMIT 1"), (user_id,))
         last = cursor.fetchone()
         if not last:
             raise HTTPException(400, "No previous role change")
-
-        cursor.execute("SELECT username, role FROM users WHERE id=?", (user_id,))
+        cursor.execute(_q("SELECT username, role FROM users WHERE id=?"), (user_id,))
         user = cursor.fetchone()
         if not user:
             raise HTTPException(404, "User not found")
-
         current = user["role"]
         prev = last["old_role"]
         if current == prev:
             raise HTTPException(400, f"Already at '{prev}'")
-
-        cursor.execute("UPDATE users SET role=? WHERE id=?", (prev, user_id))
-        cursor.execute("""
-            INSERT INTO role_history (user_id, username, old_role, new_role,
+        cursor.execute(_q("UPDATE users SET role=? WHERE id=?"), (prev, user_id))
+        cursor.execute(_q("""INSERT INTO role_history (user_id, username, old_role, new_role,
                                       changed_by, changed_by_username)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (user_id, user["username"], current, prev, admin["id"], admin["username"]))
+            VALUES (?, ?, ?, ?, ?, ?)"""),
+            (user_id, user["username"], current, prev, admin["id"], admin["username"]))
         conn.commit()
-
     return {"message": f"Reverted: {current} -> {prev}",
             "user_id": user_id, "old_role": current, "new_role": prev}
 
@@ -1931,16 +2060,15 @@ def delete_user(request: Request, user_id: int, admin=Depends(require_admin)):
         raise HTTPException(400, "Cannot delete default admin accounts")
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT username FROM users WHERE id=?", (user_id,))
+        cursor.execute(_q("SELECT username FROM users WHERE id=?"), (user_id,))
         row = cursor.fetchone()
         if not row:
             raise HTTPException(404, "User not found")
-        cursor.execute("DELETE FROM parent_children WHERE parent_user_id=?", (user_id,))
-        cursor.execute("DELETE FROM users WHERE id=?", (user_id,))
+        cursor.execute(_q("DELETE FROM parent_children WHERE parent_user_id=?"), (user_id,))
+        cursor.execute(_q("DELETE FROM users WHERE id=?"), (user_id,))
         conn.commit()
     log_audit(admin["id"], admin["username"], "delete_user", f"user:{user_id}",
-              f"deleted:{row['username']}",
-              request.client.host if request.client else None)
+              f"deleted:{row['username']}", request.client.host if request.client else None)
     return {"message": "User deleted"}
 
 
@@ -1950,9 +2078,62 @@ def update_language(data: LanguageUpdate, user=Depends(require_user)):
         raise HTTPException(400, "Supported: en, hi")
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE users SET language=? WHERE id=?", (data.language, user["id"]))
+        cursor.execute(_q("UPDATE users SET language=? WHERE id=?"), (data.language, user["id"]))
         conn.commit()
     return {"message": "Language updated", "language": data.language}
+
+
+# ============================================================
+# FEATURE 2: NOTIFICATION PREFERENCES
+# ============================================================
+def _get_user_prefs(user_id: int) -> dict:
+    """Get or create default preferences for a user."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(_q("SELECT * FROM notification_preferences WHERE user_id=?"), (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            cursor.execute(_q("""INSERT INTO notification_preferences
+                (user_id) VALUES (?)"""), (user_id,))
+            conn.commit()
+            cursor.execute(_q("SELECT * FROM notification_preferences WHERE user_id=?"), (user_id,))
+            row = cursor.fetchone()
+        return dict(row) if row else {}
+
+
+@app.get("/notifications/preferences")
+def get_notification_preferences(user=Depends(require_user)):
+    prefs = _get_user_prefs(user["id"])
+    return {
+        "email_on_grade": bool(prefs.get("email_on_grade", 1)),
+        "email_on_attendance": bool(prefs.get("email_on_attendance", 1)),
+        "email_on_fee": bool(prefs.get("email_on_fee", 1)),
+        "email_on_assignment": bool(prefs.get("email_on_assignment", 1)),
+        "email_on_report": bool(prefs.get("email_on_report", 0)),
+        "inapp_on_all": bool(prefs.get("inapp_on_all", 1)),
+    }
+
+
+@app.put("/notifications/preferences")
+def update_notification_preferences(data: NotificationPreferences, user=Depends(require_user)):
+    _get_user_prefs(user["id"])  # Ensure exists
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(_q("""UPDATE notification_preferences SET
+            email_on_grade=?, email_on_attendance=?, email_on_fee=?,
+            email_on_assignment=?, email_on_report=?, inapp_on_all=?,
+            updated_at=?
+            WHERE user_id=?"""),
+            (1 if data.email_on_grade else 0,
+             1 if data.email_on_attendance else 0,
+             1 if data.email_on_fee else 0,
+             1 if data.email_on_assignment else 0,
+             1 if data.email_on_report else 0,
+             1 if data.inapp_on_all else 0,
+             datetime.utcnow().isoformat(),
+             user["id"]))
+        conn.commit()
+    return {"message": "Preferences updated", **data.dict()}
 
 
 # ============================================================
@@ -1962,7 +2143,7 @@ def update_language(data: LanguageUpdate, user=Depends(require_user)):
 def audit_logs(admin=Depends(require_admin), limit: int = Query(100, ge=1, le=1000)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ?", (limit,))
+        cursor.execute(_q("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ?"), (limit,))
         return {"logs": [dict(r) for r in cursor.fetchall()]}
 
 
@@ -1970,7 +2151,7 @@ def audit_logs(admin=Depends(require_admin), limit: int = Query(100, ge=1, le=10
 def login_attempts(admin=Depends(require_admin), limit: int = Query(100, ge=1, le=1000)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM login_attempts ORDER BY created_at DESC LIMIT ?", (limit,))
+        cursor.execute(_q("SELECT * FROM login_attempts ORDER BY created_at DESC LIMIT ?"), (limit,))
         return {"attempts": [dict(r) for r in cursor.fetchall()]}
 
 
@@ -1981,23 +2162,18 @@ def login_attempts(admin=Depends(require_admin), limit: int = Query(100, ge=1, l
 def link_child(request: Request, data: LinkChildRequest, admin=Depends(require_admin)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id FROM users WHERE id=? AND role='parent'",
-                       (data.parent_user_id,))
+        cursor.execute(_q("SELECT id FROM users WHERE id=? AND role='parent'"), (data.parent_user_id,))
         if not cursor.fetchone():
             raise HTTPException(404, "Parent user not found")
-        cursor.execute("SELECT id FROM students WHERE id=?", (data.student_id,))
+        cursor.execute(_q("SELECT id FROM students WHERE id=?"), (data.student_id,))
         if not cursor.fetchone():
             raise HTTPException(404, "Student not found")
-
         try:
-            cursor.execute("""
-                INSERT INTO parent_children (parent_user_id, student_id, relationship)
-                VALUES (?, ?, ?)
-            """, (data.parent_user_id, data.student_id, data.relationship))
+            cursor.execute(_q("""INSERT INTO parent_children (parent_user_id, student_id, relationship)
+                VALUES (?, ?, ?)"""), (data.parent_user_id, data.student_id, data.relationship))
             conn.commit()
-        except sqlite3.IntegrityError:
+        except Exception:
             raise HTTPException(400, "Already linked")
-
     return {"message": "Child linked successfully"}
 
 
@@ -2007,13 +2183,11 @@ def get_my_children(user=Depends(require_user)):
         raise HTTPException(403, "Parents only")
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT s.id, s.name, s.grade, s.average, s.department,
+        cursor.execute(_q("""SELECT s.id, s.name, s.grade, s.average, s.department,
                    s.semester, s.class_name, pc.relationship
             FROM students s
             JOIN parent_children pc ON s.id = pc.student_id
-            WHERE pc.parent_user_id = ?
-        """, (user["id"],))
+            WHERE pc.parent_user_id = ?"""), (user["id"],))
         return {"children": [dict(r) for r in cursor.fetchall()]}
 
 
@@ -2037,11 +2211,13 @@ def get_all_links(admin=Depends(require_admin)):
 def unlink_child(request: Request, link_id: int, admin=Depends(require_admin)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM parent_children WHERE id=?", (link_id,))
+        cursor.execute(_q("DELETE FROM parent_children WHERE id=?"), (link_id,))
         if cursor.rowcount == 0:
             raise HTTPException(404, "Link not found")
         conn.commit()
     return {"message": "Unlinked successfully"}
+
+
 # ============================================================
 # ACCESS HELPER
 # ============================================================
@@ -2051,22 +2227,23 @@ def get_accessible_students(user):
         if user["role"] in ["admin", "teacher"]:
             cursor.execute("SELECT * FROM students ORDER BY id DESC")
         elif user["role"] == "parent":
-            cursor.execute("""
-                SELECT s.* FROM students s
+            cursor.execute(_q("""SELECT s.* FROM students s
                 JOIN parent_children pc ON s.id = pc.student_id
-                WHERE pc.parent_user_id = ? ORDER BY s.id DESC
-            """, (user["id"],))
+                WHERE pc.parent_user_id = ? ORDER BY s.id DESC"""), (user["id"],))
         elif user["role"] == "student":
-            cursor.execute("SELECT * FROM students WHERE user_id = ? ORDER BY id DESC",
-                           (user["id"],))
+            cursor.execute(_q("SELECT * FROM students WHERE user_id = ? ORDER BY id DESC"), (user["id"],))
         else:
             return []
 
         students = []
         for r in cursor.fetchall():
             s = dict(r)
-            s["marks"] = json.loads(s["marks"])
-            s["subjects"] = json.loads(s["subjects"])
+            try:
+                s["marks"] = json.loads(s["marks"]) if isinstance(s["marks"], str) else s["marks"]
+                s["subjects"] = json.loads(s["subjects"]) if isinstance(s["subjects"], str) else s["subjects"]
+            except Exception:
+                s["marks"] = []
+                s["subjects"] = []
             students.append(s)
         return students
 
@@ -2108,31 +2285,22 @@ def student_profile(student_id: int, user=Depends(require_user)):
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT status, COUNT(*) as count FROM attendance
-            WHERE student_id=? GROUP BY status
-        """, (student_id,))
+        cursor.execute(_q("""SELECT status, COUNT(*) as count FROM attendance
+            WHERE student_id=? GROUP BY status"""), (student_id,))
         att_stats = {r["status"]: r["count"] for r in cursor.fetchall()}
 
-        cursor.execute("""
-            SELECT * FROM performance_trends WHERE student_id=?
-            ORDER BY created_at ASC
-        """, (student_id,))
+        cursor.execute(_q("""SELECT * FROM performance_trends WHERE student_id=?
+            ORDER BY created_at ASC"""), (student_id,))
         trends = [dict(r) for r in cursor.fetchall()]
 
-        cursor.execute("""
-            SELECT * FROM notifications WHERE student_id=?
-            ORDER BY created_at DESC LIMIT 20
-        """, (student_id,))
+        cursor.execute(_q("""SELECT * FROM notifications WHERE student_id=?
+            ORDER BY created_at DESC LIMIT 20"""), (student_id,))
         notifications = [dict(r) for r in cursor.fetchall()]
 
-        cursor.execute("""
-            SELECT u.username, u.email, u.full_name, pc.relationship
+        cursor.execute(_q("""SELECT u.username, u.email, u.full_name, pc.relationship
             FROM parent_children pc
             JOIN users u ON pc.parent_user_id = u.id
-            WHERE pc.student_id=?
-        """, (student_id,))
+            WHERE pc.student_id=?"""), (student_id,))
         parents = [dict(r) for r in cursor.fetchall()]
 
     return {
@@ -2151,37 +2319,37 @@ def save_student(student: StudentRecord, background_tasks: BackgroundTasks,
         total = student.total_marks if student.total_marks is not None else sum(student.marks)
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO students (name, marks, subjects, grade, average, total_marks,
+            cursor.execute(_q("""INSERT INTO students (name, marks, subjects, grade, average, total_marks,
                                       timestamp, semester, batch_year, department, class_name)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (student.name, json.dumps(student.marks), json.dumps(student.subjects),
-                  student.grade, student.average, total,
-                  student.timestamp or datetime.now().isoformat(),
-                  student.semester, student.batch_year, student.department, student.class_name))
-            sid = cursor.lastrowid
-            cursor.execute("""
-                INSERT INTO performance_trends (student_id, semester, average, grade,
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""),
+                (student.name, json.dumps(student.marks), json.dumps(student.subjects),
+                 student.grade, student.average, total,
+                 student.timestamp or datetime.now().isoformat(),
+                 student.semester, student.batch_year, student.department, student.class_name))
+            if USE_POSTGRES:
+                cursor.execute(_q("SELECT id FROM students WHERE name=? ORDER BY id DESC LIMIT 1"), (student.name,))
+                sid = cursor.fetchone()["id"]
+            else:
+                sid = cursor.lastrowid
+
+            cursor.execute(_q("""INSERT INTO performance_trends (student_id, semester, average, grade,
                                                 total_marks, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (sid, student.semester, student.average, student.grade, total,
-                  datetime.now().isoformat()))
+                VALUES (?, ?, ?, ?, ?, ?)"""),
+                (sid, student.semester, student.average, student.grade, total,
+                 datetime.now().isoformat()))
+
             if student.grade in ["A", "A+"]:
-                cursor.execute(
-                    "INSERT INTO notifications (student_id, message, type) VALUES (?, ?, ?)",
-                    (sid, f"Congratulations! Grade {student.grade}", "Achievement"))
+                cursor.execute(_q("INSERT INTO notifications (student_id, message, type) VALUES (?, ?, ?)"),
+                               (sid, f"Congratulations! Grade {student.grade}", "Achievement"))
             elif student.grade == "F":
-                cursor.execute(
-                    "INSERT INTO notifications (student_id, message, type) VALUES (?, ?, ?)",
-                    (sid, "Warning: Grade F. Seek support.", "Warning"))
+                cursor.execute(_q("INSERT INTO notifications (student_id, message, type) VALUES (?, ?, ?)"),
+                               (sid, "Warning: Grade F. Seek support.", "Warning"))
             conn.commit()
 
         parent_emails = get_parent_emails_for_student(sid)
         if parent_emails:
-            background_tasks.add_task(
-                send_grade_notification_email,
-                student.name, student.grade, student.average, parent_emails
-            )
+            background_tasks.add_task(send_grade_notification_email,
+                student.name, student.grade, student.average, parent_emails)
 
         return {"message": "Saved", "id": sid}
     except Exception as e:
@@ -2193,14 +2361,14 @@ def delete_student(student_id: int, user=Depends(require_role("admin", "teacher"
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id FROM students WHERE id=?", (student_id,))
+            cursor.execute(_q("SELECT id FROM students WHERE id=?"), (student_id,))
             if not cursor.fetchone():
                 raise HTTPException(404, "Not found")
-            cursor.execute("DELETE FROM attendance WHERE student_id=?", (student_id,))
-            cursor.execute("DELETE FROM notifications WHERE student_id=?", (student_id,))
-            cursor.execute("DELETE FROM performance_trends WHERE student_id=?", (student_id,))
-            cursor.execute("DELETE FROM parent_children WHERE student_id=?", (student_id,))
-            cursor.execute("DELETE FROM students WHERE id=?", (student_id,))
+            cursor.execute(_q("DELETE FROM attendance WHERE student_id=?"), (student_id,))
+            cursor.execute(_q("DELETE FROM notifications WHERE student_id=?"), (student_id,))
+            cursor.execute(_q("DELETE FROM performance_trends WHERE student_id=?"), (student_id,))
+            cursor.execute(_q("DELETE FROM parent_children WHERE student_id=?"), (student_id,))
+            cursor.execute(_q("DELETE FROM students WHERE id=?"), (student_id,))
             conn.commit()
         return {"message": "Deleted"}
     except HTTPException:
@@ -2210,7 +2378,7 @@ def delete_student(student_id: int, user=Depends(require_role("admin", "teacher"
 
 
 # ============================================================
-# PHASE 3: Student Photo Upload
+# STUDENT PHOTO
 # ============================================================
 @app.post("/students/{student_id}/photo")
 async def upload_student_photo(
@@ -2238,35 +2406,24 @@ async def upload_student_photo(
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE students SET photo_url=? WHERE id=?",
-            (f"/uploads/photos/{filename}", student_id),
-        )
+        cursor.execute(_q("UPDATE students SET photo_url=? WHERE id=?"),
+                       (f"/uploads/photos/{filename}", student_id))
         conn.commit()
 
     log_live_event(user["id"], "photo_uploaded", {
-        "student_id": student_id,
-        "photo_url": f"/uploads/photos/{filename}",
+        "student_id": student_id, "photo_url": f"/uploads/photos/{filename}",
     })
-
-    return {
-        "message": "Photo uploaded",
-        "photo_url": f"/uploads/photos/{filename}",
-    }
+    return {"message": "Photo uploaded", "photo_url": f"/uploads/photos/{filename}"}
 
 
 @app.delete("/students/{student_id}/photo")
-def delete_student_photo(
-    student_id: int,
-    user=Depends(require_role("admin", "teacher")),
-):
+def delete_student_photo(student_id: int, user=Depends(require_role("admin", "teacher"))):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT photo_url FROM students WHERE id=?", (student_id,))
+        cursor.execute(_q("SELECT photo_url FROM students WHERE id=?"), (student_id,))
         row = cursor.fetchone()
         if not row:
             raise HTTPException(404, "Student not found")
-
         if row["photo_url"]:
             old_file = row["photo_url"].replace("/uploads/", "")
             old_path = os.path.join(UPLOAD_DIR, old_file)
@@ -2275,64 +2432,45 @@ def delete_student_photo(
                     os.remove(old_path)
                 except Exception:
                     pass
-
-        cursor.execute("UPDATE students SET photo_url=NULL WHERE id=?", (student_id,))
+        cursor.execute(_q("UPDATE students SET photo_url=NULL WHERE id=?"), (student_id,))
         conn.commit()
-
     return {"message": "Photo deleted"}
 
 
 @app.put("/students/{student_id}/profile")
-def update_student_profile(
-    student_id: int,
-    data: StudentProfileUpdate,
-    user=Depends(require_role("admin", "teacher")),
-):
+def update_student_profile(student_id: int, data: StudentProfileUpdate,
+                           user=Depends(require_role("admin", "teacher"))):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id FROM students WHERE id=?", (student_id,))
+        cursor.execute(_q("SELECT id FROM students WHERE id=?"), (student_id,))
         if not cursor.fetchone():
             raise HTTPException(404, "Student not found")
-
         update_data = data.dict(exclude_unset=True)
         if not update_data:
             raise HTTPException(400, "No fields to update")
-
         set_clause = ", ".join(f"{k}=?" for k in update_data.keys())
         values = list(update_data.values()) + [student_id]
-
-        cursor.execute(f"UPDATE students SET {set_clause} WHERE id=?", values)
+        cursor.execute(_q(f"UPDATE students SET {set_clause} WHERE id=?"), values)
         conn.commit()
-
     return {"message": "Profile updated"}
 
 
 # ============================================================
-# PHASE 3: Attendance Heatmap
+# ATTENDANCE HEATMAP
 # ============================================================
 @app.get("/attendance/{student_id}/heatmap")
-def attendance_heatmap(
-    student_id: int,
-    year: Optional[int] = None,
-    user=Depends(require_user),
-):
+def attendance_heatmap(student_id: int, year: Optional[int] = None,
+                       user=Depends(require_user)):
     if not any(s["id"] == student_id for s in get_accessible_students(user)):
         raise HTTPException(403, "Access denied")
-
     if not year:
         year = datetime.now().year
-
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT date, status, COUNT(*) as count
-            FROM attendance
-            WHERE student_id=? AND date LIKE ?
-            GROUP BY date, status
-        """, (student_id, f"{year}%"))
-
+        cursor.execute(_q("""SELECT date, status, COUNT(*) as count
+            FROM attendance WHERE student_id=? AND date LIKE ?
+            GROUP BY date, status"""), (student_id, f"{year}%"))
         rows = cursor.fetchall()
-
         by_date = {}
         for r in rows:
             d = r["date"]
@@ -2341,7 +2479,6 @@ def attendance_heatmap(
             status_key = r["status"].lower()
             if status_key in by_date[d]:
                 by_date[d][status_key] += r["count"]
-
         heatmap = []
         for date_str, counts in by_date.items():
             total = sum(counts.values())
@@ -2349,54 +2486,41 @@ def attendance_heatmap(
                 continue
             score = (counts["present"] + counts["late"] * 0.5 + counts["excused"] * 0.5) / total
             heatmap.append({
-                "date": date_str,
-                "count": total,
-                "score": round(score, 2),
+                "date": date_str, "count": total, "score": round(score, 2),
                 "status": "present" if score >= 0.75 else "partial" if score >= 0.5 else "absent",
             })
-
-        return {
-            "student_id": student_id,
-            "year": year,
-            "heatmap": sorted(heatmap, key=lambda x: x["date"]),
-        }
+        return {"student_id": student_id, "year": year,
+                "heatmap": sorted(heatmap, key=lambda x: x["date"])}
 
 
 # ============================================================
-# PHASE 3: EXAMS
+# EXAMS
 # ============================================================
 @app.post("/exams/create")
-def create_exam(
-    data: ExamCreate,
-    user=Depends(require_role("admin", "teacher")),
-):
+def create_exam(data: ExamCreate, user=Depends(require_role("admin", "teacher"))):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO exams (name, class_name, subject, exam_date, start_time, end_time,
+        cursor.execute(_q("""INSERT INTO exams (name, class_name, subject, exam_date, start_time, end_time,
                               total_marks, room, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (data.name, data.class_name, data.subject, data.exam_date,
-              data.start_time, data.end_time, data.total_marks, data.room, data.notes))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"""),
+            (data.name, data.class_name, data.subject, data.exam_date,
+             data.start_time, data.end_time, data.total_marks, data.room, data.notes))
         conn.commit()
-        exam_id = cursor.lastrowid
-
+        if USE_POSTGRES:
+            cursor.execute(_q("SELECT id FROM exams ORDER BY id DESC LIMIT 1"))
+            exam_id = cursor.fetchone()["id"]
+        else:
+            exam_id = cursor.lastrowid
     log_live_event(user["id"], "exam_created", {"exam_id": exam_id, "name": data.name})
     return {"message": "Exam created", "id": exam_id}
 
 
 @app.get("/exams")
-def list_exams(
-    class_name: Optional[str] = None,
-    user=Depends(require_user),
-):
+def list_exams(class_name: Optional[str] = None, user=Depends(require_user)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         if class_name:
-            cursor.execute(
-                "SELECT * FROM exams WHERE class_name=? ORDER BY exam_date ASC",
-                (class_name,),
-            )
+            cursor.execute(_q("SELECT * FROM exams WHERE class_name=? ORDER BY exam_date ASC"), (class_name,))
         else:
             cursor.execute("SELECT * FROM exams ORDER BY exam_date ASC")
         return {"exams": [dict(r) for r in cursor.fetchall()]}
@@ -2406,7 +2530,7 @@ def list_exams(
 def delete_exam(exam_id: int, user=Depends(require_role("admin", "teacher"))):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM exams WHERE id=?", (exam_id,))
+        cursor.execute(_q("DELETE FROM exams WHERE id=?"), (exam_id,))
         if cursor.rowcount == 0:
             raise HTTPException(404, "Exam not found")
         conn.commit()
@@ -2414,38 +2538,28 @@ def delete_exam(exam_id: int, user=Depends(require_role("admin", "teacher"))):
 
 
 # ============================================================
-# PHASE 3: TIMETABLE
+# TIMETABLE
 # ============================================================
 @app.post("/timetable/create")
-def create_timetable_entry(
-    data: TimetableCreate,
-    user=Depends(require_role("admin", "teacher")),
-):
+def create_timetable_entry(data: TimetableCreate, user=Depends(require_role("admin", "teacher"))):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO timetable (class_name, day_of_week, period, subject,
+        cursor.execute(_q("""INSERT INTO timetable (class_name, day_of_week, period, subject,
                                    teacher_name, room, start_time, end_time)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (data.class_name, data.day_of_week, data.period, data.subject,
-              data.teacher_name, data.room, data.start_time, data.end_time))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""),
+            (data.class_name, data.day_of_week, data.period, data.subject,
+             data.teacher_name, data.room, data.start_time, data.end_time))
         conn.commit()
-    return {"message": "Timetable entry created", "id": cursor.lastrowid}
+    return {"message": "Timetable entry created"}
 
 
 @app.get("/timetable")
-def list_timetable(
-    class_name: Optional[str] = None,
-    user=Depends(require_user),
-):
+def list_timetable(class_name: Optional[str] = None, user=Depends(require_user)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         if class_name:
-            cursor.execute(
-                """SELECT * FROM timetable WHERE class_name=?
-                   ORDER BY day_of_week, period""",
-                (class_name,),
-            )
+            cursor.execute(_q("""SELECT * FROM timetable WHERE class_name=?
+                   ORDER BY day_of_week, period"""), (class_name,))
         else:
             cursor.execute("SELECT * FROM timetable ORDER BY class_name, day_of_week, period")
         return {"timetable": [dict(r) for r in cursor.fetchall()]}
@@ -2455,127 +2569,101 @@ def list_timetable(
 def delete_timetable_entry(entry_id: int, user=Depends(require_role("admin", "teacher"))):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM timetable WHERE id=?", (entry_id,))
-        if cursor.rowcount == 0:
-            raise HTTPException(404, "Entry not found")
+        cursor.execute(_q("DELETE FROM timetable WHERE id=?"), (entry_id,))
         conn.commit()
     return {"message": "Entry deleted"}
 
 
 # ============================================================
-# PHASE 3: ASSIGNMENTS
+# ASSIGNMENTS
 # ============================================================
 @app.post("/assignments/create")
-def create_assignment(
-    data: AssignmentCreate,
-    user=Depends(require_role("admin", "teacher")),
-):
+def create_assignment(data: AssignmentCreate, user=Depends(require_role("admin", "teacher"))):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO assignments (title, description, class_name, subject,
+        cursor.execute(_q("""INSERT INTO assignments (title, description, class_name, subject,
                                     due_date, total_marks, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (data.title, data.description, data.class_name, data.subject,
-              data.due_date, data.total_marks, user["id"]))
+            VALUES (?, ?, ?, ?, ?, ?, ?)"""),
+            (data.title, data.description, data.class_name, data.subject,
+             data.due_date, data.total_marks, user["id"]))
         conn.commit()
-        aid = cursor.lastrowid
-
-    log_live_event(user["id"], "assignment_created", {"assignment_id": aid})
-    return {"message": "Assignment created", "id": aid}
+    return {"message": "Assignment created"}
 
 
 @app.get("/assignments")
-def list_assignments(
-    class_name: Optional[str] = None,
-    user=Depends(require_user),
-):
+def list_assignments(class_name: Optional[str] = None, user=Depends(require_user)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         if class_name:
-            cursor.execute(
-                "SELECT * FROM assignments WHERE class_name=? ORDER BY due_date ASC",
-                (class_name,),
-            )
+            cursor.execute(_q("SELECT * FROM assignments WHERE class_name=? ORDER BY due_date ASC"), (class_name,))
         else:
             cursor.execute("SELECT * FROM assignments ORDER BY due_date ASC")
-
         assignments = [dict(r) for r in cursor.fetchall()]
-
         for a in assignments:
-            cursor.execute("""
-                SELECT COUNT(*) as total,
+            cursor.execute(_q("""SELECT COUNT(*) as total,
                        SUM(CASE WHEN status='submitted' THEN 1 ELSE 0 END) as submitted,
                        SUM(CASE WHEN status='graded' THEN 1 ELSE 0 END) as graded
-                FROM assignment_submissions WHERE assignment_id=?
-            """, (a["id"],))
+                FROM assignment_submissions WHERE assignment_id=?"""), (a["id"],))
             row = cursor.fetchone()
             a["stats"] = {
                 "total": row["total"] or 0,
                 "submitted": row["submitted"] or 0,
                 "graded": row["graded"] or 0,
             }
-
         return {"assignments": assignments}
 
 
 @app.get("/assignments/{assignment_id}/submissions")
-def list_submissions(
-    assignment_id: int,
-    user=Depends(require_role("admin", "teacher")),
-):
+def list_submissions(assignment_id: int, user=Depends(require_role("admin", "teacher"))):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT s.id as student_id, s.name as student_name,
+        cursor.execute(_q("""SELECT s.id as student_id, s.name as student_name,
                    sub.id as submission_id, sub.status, sub.marks_obtained,
                    sub.feedback, sub.submitted_at
             FROM students s
             LEFT JOIN assignment_submissions sub
                 ON sub.student_id = s.id AND sub.assignment_id = ?
             WHERE s.class_name = (SELECT class_name FROM assignments WHERE id=?)
-            ORDER BY s.name
-        """, (assignment_id, assignment_id))
+            ORDER BY s.name"""), (assignment_id, assignment_id))
         return {"submissions": [dict(r) for r in cursor.fetchall()]}
 
 
 @app.put("/assignments/submissions/{submission_id}")
-def update_submission(
-    submission_id: int,
-    data: SubmissionUpdate,
-    user=Depends(require_role("admin", "teacher")),
-):
+def update_submission(submission_id: int, data: SubmissionUpdate,
+                      user=Depends(require_role("admin", "teacher"))):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         update_data = data.dict(exclude_unset=True)
         if not update_data:
             raise HTTPException(400, "No fields to update")
-
         set_clause = ", ".join(f"{k}=?" for k in update_data.keys())
         values = list(update_data.values()) + [submission_id]
-
-        cursor.execute(f"UPDATE assignment_submissions SET {set_clause} WHERE id=?", values)
+        cursor.execute(_q(f"UPDATE assignment_submissions SET {set_clause} WHERE id=?"), values)
         conn.commit()
-
     return {"message": "Submission updated"}
 
 
 @app.post("/assignments/{assignment_id}/submit/{student_id}")
-def submit_assignment(
-    assignment_id: int,
-    student_id: int,
-    user=Depends(require_role("admin", "teacher")),
-):
+def submit_assignment(assignment_id: int, student_id: int,
+                      user=Depends(require_role("admin", "teacher"))):
+    now = datetime.now().isoformat()
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO assignment_submissions (assignment_id, student_id, status, submitted_at)
-            VALUES (?, ?, 'submitted', ?)
-            ON CONFLICT(assignment_id, student_id)
-            DO UPDATE SET status='submitted', submitted_at=?
-        """, (assignment_id, student_id, datetime.now().isoformat(), datetime.now().isoformat()))
+        if USE_POSTGRES:
+            cursor.execute(_q("""INSERT INTO assignment_submissions
+                (assignment_id, student_id, status, submitted_at)
+                VALUES (?, ?, 'submitted', ?)
+                ON CONFLICT (assignment_id, student_id)
+                DO UPDATE SET status='submitted', submitted_at=?"""),
+                (assignment_id, student_id, now, now))
+        else:
+            cursor.execute(_q("""INSERT INTO assignment_submissions
+                (assignment_id, student_id, status, submitted_at)
+                VALUES (?, ?, 'submitted', ?)
+                ON CONFLICT(assignment_id, student_id)
+                DO UPDATE SET status='submitted', submitted_at=?"""),
+                (assignment_id, student_id, now, now))
         conn.commit()
-
     return {"message": "Marked as submitted"}
 
 
@@ -2583,30 +2671,24 @@ def submit_assignment(
 def delete_assignment(assignment_id: int, user=Depends(require_role("admin", "teacher"))):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM assignment_submissions WHERE assignment_id=?", (assignment_id,))
-        cursor.execute("DELETE FROM assignments WHERE id=?", (assignment_id,))
-        if cursor.rowcount == 0:
-            raise HTTPException(404, "Assignment not found")
+        cursor.execute(_q("DELETE FROM assignment_submissions WHERE assignment_id=?"), (assignment_id,))
+        cursor.execute(_q("DELETE FROM assignments WHERE id=?"), (assignment_id,))
         conn.commit()
     return {"message": "Assignment deleted"}
 
 
 # ============================================================
-# PHASE 3: FEES
+# FEES
 # ============================================================
 @app.post("/fees/structure/create")
-def create_fee_structure(
-    data: FeeStructureCreate,
-    user=Depends(require_admin),
-):
+def create_fee_structure(data: FeeStructureCreate, user=Depends(require_admin)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO fee_structures (class_name, fee_type, amount, frequency, academic_year)
-            VALUES (?, ?, ?, ?, ?)
-        """, (data.class_name, data.fee_type, data.amount, data.frequency, data.academic_year))
+        cursor.execute(_q("""INSERT INTO fee_structures (class_name, fee_type, amount, frequency, academic_year)
+            VALUES (?, ?, ?, ?, ?)"""),
+            (data.class_name, data.fee_type, data.amount, data.frequency, data.academic_year))
         conn.commit()
-    return {"message": "Fee structure created", "id": cursor.lastrowid}
+    return {"message": "Fee structure created"}
 
 
 @app.get("/fees/structure")
@@ -2621,122 +2703,76 @@ def list_fee_structures(user=Depends(require_user)):
 def delete_fee_structure(structure_id: int, user=Depends(require_admin)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM fee_structures WHERE id=?", (structure_id,))
+        cursor.execute(_q("DELETE FROM fee_structures WHERE id=?"), (structure_id,))
         conn.commit()
     return {"message": "Fee structure deleted"}
 
 
 @app.post("/fees/payment/create")
-def record_fee_payment(
-    data: FeePaymentCreate,
-    user=Depends(require_role("admin", "teacher")),
-):
+def record_fee_payment(data: FeePaymentCreate, user=Depends(require_role("admin", "teacher"))):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO fee_payments (student_id, fee_type, amount, payment_date,
+        cursor.execute(_q("""INSERT INTO fee_payments (student_id, fee_type, amount, payment_date,
                                      payment_method, transaction_id, status, due_date, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (data.student_id, data.fee_type, data.amount, data.payment_date,
-              data.payment_method, data.transaction_id, data.status,
-              data.due_date, data.notes))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"""),
+            (data.student_id, data.fee_type, data.amount, data.payment_date,
+             data.payment_method, data.transaction_id, data.status, data.due_date, data.notes))
         conn.commit()
-        payment_id = cursor.lastrowid
-
-    log_live_event(user["id"], "fee_paid", {
-        "student_id": data.student_id,
-        "amount": data.amount,
-    })
-    return {"message": "Payment recorded", "id": payment_id}
+    log_live_event(user["id"], "fee_paid", {"student_id": data.student_id, "amount": data.amount})
+    return {"message": "Payment recorded"}
 
 
 @app.get("/fees/payments")
-def list_fee_payments(
-    student_id: Optional[int] = None,
-    user=Depends(require_user),
-):
+def list_fee_payments(student_id: Optional[int] = None, user=Depends(require_user)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-
         if user["role"] == "student":
-            cursor.execute("SELECT id FROM students WHERE user_id=?", (user["id"],))
+            cursor.execute(_q("SELECT id FROM students WHERE user_id=?"), (user["id"],))
             row = cursor.fetchone()
             if not row:
                 return {"payments": [], "summary": {}}
             student_id = row["id"]
-
         if student_id:
-            cursor.execute("""
-                SELECT fp.*, s.name as student_name
+            cursor.execute(_q("""SELECT fp.*, s.name as student_name
                 FROM fee_payments fp
                 JOIN students s ON fp.student_id = s.id
                 WHERE fp.student_id=?
-                ORDER BY fp.payment_date DESC
-            """, (student_id,))
+                ORDER BY fp.payment_date DESC"""), (student_id,))
         else:
-            cursor.execute("""
-                SELECT fp.*, s.name as student_name
+            cursor.execute("""SELECT fp.*, s.name as student_name
                 FROM fee_payments fp
                 JOIN students s ON fp.student_id = s.id
-                ORDER BY fp.payment_date DESC
-                LIMIT 500
-            """)
-
+                ORDER BY fp.payment_date DESC LIMIT 500""")
         payments = [dict(r) for r in cursor.fetchall()]
-
         total_paid = sum(p["amount"] for p in payments if p["status"] == "paid")
         total_pending = sum(p["amount"] for p in payments if p["status"] == "pending")
-
-        return {
-            "payments": payments,
-            "summary": {
-                "total_paid": total_paid,
-                "total_pending": total_pending,
-                "count": len(payments),
-            },
-        }
-
-
-@app.get("/fees/student/{student_id}/summary")
-def student_fee_summary(student_id: int, user=Depends(require_user)):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT fee_type,
-                   SUM(CASE WHEN status='paid' THEN amount ELSE 0 END) as paid,
-                   SUM(CASE WHEN status='pending' THEN amount ELSE 0 END) as pending
-            FROM fee_payments WHERE student_id=?
-            GROUP BY fee_type
-        """, (student_id,))
-        summary = [dict(r) for r in cursor.fetchall()]
-    return {"summary": summary}
+        return {"payments": payments, "summary": {
+            "total_paid": total_paid, "total_pending": total_pending, "count": len(payments),
+        }}
 
 
 # ============================================================
-# PHASE 3: SAVED FILTERS
+# SAVED FILTERS
 # ============================================================
 @app.post("/filters/save")
 def save_filter(data: SavedFilterCreate, user=Depends(require_user)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO saved_filters (user_id, name, entity, filter_json, is_shared)
-            VALUES (?, ?, ?, ?, ?)
-        """, (user["id"], data.name, data.entity, data.filter_json,
-              1 if data.is_shared else 0))
+        cursor.execute(_q("""INSERT INTO saved_filters (user_id, name, entity, filter_json, is_shared)
+            VALUES (?, ?, ?, ?, ?)"""),
+            (user["id"], data.name, data.entity, data.filter_json,
+             1 if data.is_shared else 0))
         conn.commit()
-    return {"message": "Filter saved", "id": cursor.lastrowid}
+    return {"message": "Filter saved"}
 
 
 @app.get("/filters")
 def list_saved_filters(user=Depends(require_user)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT * FROM saved_filters
+        cursor.execute(_q("""SELECT * FROM saved_filters
             WHERE user_id=? OR is_shared=1
-            ORDER BY created_at DESC
-        """, (user["id"],))
+            ORDER BY created_at DESC"""), (user["id"],))
         return {"filters": [dict(r) for r in cursor.fetchall()]}
 
 
@@ -2744,18 +2780,13 @@ def list_saved_filters(user=Depends(require_user)):
 def delete_saved_filter(filter_id: int, user=Depends(require_user)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "DELETE FROM saved_filters WHERE id=? AND user_id=?",
-            (filter_id, user["id"]),
-        )
-        if cursor.rowcount == 0:
-            raise HTTPException(404, "Filter not found or not yours")
+        cursor.execute(_q("DELETE FROM saved_filters WHERE id=? AND user_id=?"), (filter_id, user["id"]))
         conn.commit()
     return {"message": "Filter deleted"}
 
 
 # ============================================================
-# PHASE 3: BACKUP & RESTORE
+# BACKUP & RESTORE
 # ============================================================
 @app.post("/backup/create")
 def create_backup(user=Depends(require_admin)):
@@ -2763,32 +2794,22 @@ def create_backup(user=Depends(require_admin)):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_filename = f"backup_{timestamp}.zip"
         backup_path = os.path.join(BACKUP_DIR, backup_filename)
-
         with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.write(DB_PATH, "student_marks.db")
-
             if os.path.exists(UPLOAD_DIR):
                 for root, dirs, files in os.walk(UPLOAD_DIR):
                     for file in files:
                         filepath = os.path.join(root, file)
                         arcname = os.path.relpath(filepath, os.path.dirname(UPLOAD_DIR))
                         zf.write(filepath, arcname)
-
         size = os.path.getsize(backup_path)
-
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO backup_logs (filename, size_bytes, backup_type, created_by)
-                VALUES (?, ?, ?, ?)
-            """, (backup_filename, size, "manual", user["id"]))
+            cursor.execute(_q("""INSERT INTO backup_logs (filename, size_bytes, backup_type, created_by)
+                VALUES (?, ?, ?, ?)"""), (backup_filename, size, "manual", user["id"]))
             conn.commit()
-
-        return {
-            "message": "Backup created",
-            "filename": backup_filename,
-            "size_mb": round(size / 1024 / 1024, 2),
-        }
+        return {"message": "Backup created", "filename": backup_filename,
+                "size_mb": round(size / 1024 / 1024, 2)}
     except Exception as e:
         raise HTTPException(500, f"Backup failed: {str(e)}")
 
@@ -2810,41 +2831,28 @@ def download_backup(filename: str, user=Depends(require_admin)):
 
 
 @app.post("/backup/restore")
-async def restore_backup(
-    file: UploadFile = File(...),
-    user=Depends(require_admin),
-):
+async def restore_backup(file: UploadFile = File(...), user=Depends(require_admin)):
     try:
         content = await file.read()
-
         temp_path = os.path.join(BACKUP_DIR, f"restore_temp_{int(datetime.now().timestamp())}.zip")
         with open(temp_path, "wb") as f:
             f.write(content)
-
         if not zipfile.is_zipfile(temp_path):
             os.remove(temp_path)
             raise HTTPException(400, "Invalid ZIP file")
-
         emergency_backup = os.path.join(BACKUP_DIR, f"emergency_{int(datetime.now().timestamp())}.db")
         shutil.copy(DB_PATH, emergency_backup)
-
         extract_dir = os.path.join(BACKUP_DIR, "restore_temp")
         os.makedirs(extract_dir, exist_ok=True)
-
         with zipfile.ZipFile(temp_path, "r") as zf:
             zf.extractall(extract_dir)
-
         restored_db = os.path.join(extract_dir, "student_marks.db")
         if os.path.exists(restored_db):
             shutil.copy(restored_db, DB_PATH)
-
         shutil.rmtree(extract_dir, ignore_errors=True)
         os.remove(temp_path)
-
-        return {
-            "message": "Backup restored successfully",
-            "emergency_backup": os.path.basename(emergency_backup),
-        }
+        return {"message": "Backup restored successfully",
+                "emergency_backup": os.path.basename(emergency_backup)}
     except HTTPException:
         raise
     except Exception as e:
@@ -2856,7 +2864,6 @@ def list_auto_backups(user=Depends(require_admin)):
     auto_dir = os.path.join(BACKUP_DIR, "auto")
     if not os.path.exists(auto_dir):
         return {"backups": []}
-
     backups = []
     for f in sorted(os.listdir(auto_dir), reverse=True):
         if f.endswith(".zip"):
@@ -2867,23 +2874,20 @@ def list_auto_backups(user=Depends(require_admin)):
                 "created_at": datetime.fromtimestamp(os.path.getmtime(path)).isoformat(),
             })
     return {"backups": backups}
+
+
 # ============================================================
-# PHASE 3: SCHEDULED REPORTS
+# FEATURE 3: SCHEDULED REPORTS
 # ============================================================
 @app.post("/reports/schedule")
-def create_scheduled_report(
-    data: ScheduledReportCreate,
-    user=Depends(require_admin),
-):
+def create_scheduled_report(data: ScheduledReportCreate, user=Depends(require_admin)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO scheduled_reports (report_type, recipients, schedule, enabled)
-            VALUES (?, ?, ?, ?)
-        """, (data.report_type, data.recipients, data.schedule,
-              1 if data.enabled else 0))
+        cursor.execute(_q("""INSERT INTO scheduled_reports (report_type, recipients, schedule, enabled)
+            VALUES (?, ?, ?, ?)"""),
+            (data.report_type, data.recipients, data.schedule, 1 if data.enabled else 0))
         conn.commit()
-    return {"message": "Scheduled report created", "id": cursor.lastrowid}
+    return {"message": "Scheduled report created"}
 
 
 @app.get("/reports/scheduled")
@@ -2898,25 +2902,52 @@ def list_scheduled_reports(user=Depends(require_admin)):
 def delete_scheduled_report(report_id: int, user=Depends(require_admin)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM scheduled_reports WHERE id=?", (report_id,))
+        cursor.execute(_q("DELETE FROM scheduled_reports WHERE id=?"), (report_id,))
         conn.commit()
     return {"message": "Scheduled report deleted"}
 
 
+@app.get("/reports/upcoming")
+def upcoming_reports(user=Depends(require_user)):
+    """Returns next scheduled runs for reports."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(_q("SELECT * FROM scheduled_reports WHERE enabled=1"))
+        reports = [dict(r) for r in cursor.fetchall()]
+        upcoming = []
+        for r in reports:
+            last = r.get("last_sent")
+            schedule = r.get("schedule", "weekly")
+            days_map = {"daily": 1, "weekly": 7, "monthly": 30}
+            days = days_map.get(schedule, 7)
+            if last:
+                try:
+                    last_dt = datetime.fromisoformat(str(last))
+                    next_dt = last_dt + timedelta(days=days)
+                except (ValueError, TypeError):
+                    next_dt = datetime.now() + timedelta(days=days)
+            else:
+                next_dt = datetime.now() + timedelta(days=days)
+            upcoming.append({
+                "report_id": r["id"],
+                "report_type": r["report_type"],
+                "recipients": r["recipients"],
+                "schedule": schedule,
+                "next_run": next_dt.isoformat(),
+            })
+        return {"upcoming": upcoming, "count": len(upcoming)}
+
+
 def send_weekly_report():
-    """Background task — sends weekly reports."""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM students")
             students = [dict(r) for r in cursor.fetchall()]
-
-            cursor.execute("SELECT * FROM scheduled_reports WHERE enabled=1")
+            cursor.execute(_q("SELECT * FROM scheduled_reports WHERE enabled=1"))
             reports = [dict(r) for r in cursor.fetchall()]
-
         if not students or not reports:
             return
-
         avg = sum(s["average"] for s in students) / len(students)
         html = f"""
         <html><body style="font-family: Arial, sans-serif; padding: 20px;">
@@ -2924,50 +2955,42 @@ def send_weekly_report():
             <p><b>Total Students:</b> {len(students)}</p>
             <p><b>Average Score:</b> {avg:.2f}%</p>
             <p><b>Date:</b> {datetime.now().strftime('%Y-%m-%d')}</p>
-            <p>Log in to Student Marks Analyzer for full details.</p>
         </body></html>
         """
-
         for report in reports:
             recipients = [r.strip() for r in report["recipients"].split(",") if r.strip()]
             for email in recipients:
                 send_email_notification(email, "Weekly Performance Report", html)
-                print(f"[REPORT] Sent to {email}")
-
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE scheduled_reports SET last_sent=? WHERE enabled=1",
-                (datetime.now().isoformat(),),
-            )
+            cursor.execute(_q("UPDATE scheduled_reports SET last_sent=? WHERE enabled=1"),
+                           (datetime.now().isoformat(),))
             conn.commit()
     except Exception as e:
         print(f"[REPORT ERROR] {e}")
 
 
 # ============================================================
-# PHASE 3: BULK OPERATIONS (existing + extended)
+# BULK OPERATIONS
 # ============================================================
 @app.post("/students/bulk-delete")
 def bulk_delete_students(request: Request, data: BulkDeleteRequest,
                          user=Depends(require_role("admin", "teacher"))):
     if not data.student_ids:
         raise HTTPException(400, "No student IDs provided")
-
     deleted = 0
     with get_db_connection() as conn:
         cursor = conn.cursor()
         for sid in data.student_ids:
-            cursor.execute("DELETE FROM attendance WHERE student_id=?", (sid,))
-            cursor.execute("DELETE FROM notifications WHERE student_id=?", (sid,))
-            cursor.execute("DELETE FROM performance_trends WHERE student_id=?", (sid,))
-            cursor.execute("DELETE FROM parent_children WHERE student_id=?", (sid,))
-            cursor.execute("DELETE FROM assignment_submissions WHERE student_id=?", (sid,))
-            cursor.execute("DELETE FROM fee_payments WHERE student_id=?", (sid,))
-            cursor.execute("DELETE FROM students WHERE id=?", (sid,))
+            cursor.execute(_q("DELETE FROM attendance WHERE student_id=?"), (sid,))
+            cursor.execute(_q("DELETE FROM notifications WHERE student_id=?"), (sid,))
+            cursor.execute(_q("DELETE FROM performance_trends WHERE student_id=?"), (sid,))
+            cursor.execute(_q("DELETE FROM parent_children WHERE student_id=?"), (sid,))
+            cursor.execute(_q("DELETE FROM assignment_submissions WHERE student_id=?"), (sid,))
+            cursor.execute(_q("DELETE FROM fee_payments WHERE student_id=?"), (sid,))
+            cursor.execute(_q("DELETE FROM students WHERE id=?"), (sid,))
             deleted += cursor.rowcount
         conn.commit()
-
     return {"message": f"Deleted {deleted} students", "deleted": deleted}
 
 
@@ -2976,18 +2999,14 @@ def bulk_send_notifications(request: Request, data: BulkNotificationRequest,
                             user=Depends(require_role("admin", "teacher"))):
     if not data.student_ids:
         raise HTTPException(400, "No student IDs provided")
-
     sent = 0
     with get_db_connection() as conn:
         cursor = conn.cursor()
         for sid in data.student_ids:
-            cursor.execute(
-                "INSERT INTO notifications (student_id, message, type) VALUES (?, ?, ?)",
-                (sid, data.message, data.type)
-            )
+            cursor.execute(_q("INSERT INTO notifications (student_id, message, type) VALUES (?, ?, ?)"),
+                           (sid, data.message, data.type))
             sent += 1
         conn.commit()
-
     return {"message": f"Sent {sent} notifications", "sent": sent}
 
 
@@ -2996,42 +3015,161 @@ def bulk_attendance(request: Request, data: BulkAttendanceRequest,
                     user=Depends(require_role("admin", "teacher"))):
     if not data.student_ids:
         raise HTTPException(400, "No student IDs")
-
     recorded = 0
     with get_db_connection() as conn:
         cursor = conn.cursor()
         for sid in data.student_ids:
-            cursor.execute("""
-                INSERT INTO attendance (student_id, date, status, subject)
-                VALUES (?, ?, ?, ?)
-            """, (sid, data.date, data.status, data.subject))
+            cursor.execute(_q("""INSERT INTO attendance (student_id, date, status, subject)
+                VALUES (?, ?, ?, ?)"""), (sid, data.date, data.status, data.subject))
             if data.status in ["Absent", "Late"]:
-                cursor.execute(
-                    "INSERT INTO notifications (student_id, message, type) VALUES (?, ?, ?)",
-                    (sid, f"Marked {data.status} on {data.date}", "Warning"))
+                cursor.execute(_q("INSERT INTO notifications (student_id, message, type) VALUES (?, ?, ?)"),
+                               (sid, f"Marked {data.status} on {data.date}", "Warning"))
             recorded += 1
         conn.commit()
-
-    return {"message": f"Recorded attendance for {recorded} students",
-            "recorded": recorded}
+    return {"message": f"Recorded attendance for {recorded} students", "recorded": recorded}
 
 
 # ============================================================
-# CLASSES (existing)
+# FEATURE 5: BULK IMPORT IMPROVEMENTS
+# ============================================================
+class BulkImportPreviewRequest(BaseModel):
+    csv_text: str
+
+
+class BulkImportCommitRequest(BaseModel):
+    rows: List[Dict[str, Any]]
+
+
+@app.post("/students/bulk-import/preview")
+def bulk_import_preview(request: Request, data: BulkImportPreviewRequest,
+                        user=Depends(require_role("admin", "teacher"))):
+    """Parse CSV text and return preview with validation errors."""
+    try:
+        reader = csv_module.DictReader(io.StringIO(data.csv_text))
+        fmap = {f.lower().strip(): f for f in (reader.fieldnames or [])}
+        missing = [r for r in ["name", "marks", "subjects"] if r not in fmap]
+        if missing:
+            raise HTTPException(400, f"Missing columns: {missing}")
+
+        preview = []
+        errors = []
+        for i, row in enumerate(reader, start=2):
+            try:
+                name = str(row.get(fmap["name"], "")).strip()
+                if not name:
+                    errors.append({"row": i, "error": "empty name"})
+                    continue
+
+                marks_raw = str(row.get(fmap["marks"], "")).strip()
+                marks = []
+                for sep in [",", ";", "|"]:
+                    if sep in marks_raw:
+                        marks = [float(m.strip()) for m in marks_raw.split(sep) if m.strip()]
+                        break
+                if not marks:
+                    marks = [float(marks_raw)]
+
+                subj_raw = str(row.get(fmap["subjects"], "")).strip()
+                subjects = []
+                for sep in [",", ";", "|"]:
+                    if sep in subj_raw:
+                        subjects = [s.strip() for s in subj_raw.split(sep) if s.strip()]
+                        break
+                if not subjects:
+                    subjects = [subj_raw]
+
+                if len(marks) != len(subjects):
+                    errors.append({"row": i, "error": "marks/subjects length mismatch"})
+                    continue
+                if any(m < 0 or m > 100 for m in marks):
+                    errors.append({"row": i, "error": "marks must be 0-100"})
+                    continue
+
+                stats = calculate_statistics(marks)
+                grade, _ = determine_grade(stats["average"])
+                preview.append({
+                    "row": i,
+                    "name": name,
+                    "marks": marks,
+                    "subjects": subjects,
+                    "average": round(stats["average"], 2),
+                    "grade": grade,
+                    "semester": str(row.get(fmap.get("semester", ""), "") or "").strip() or None,
+                    "department": str(row.get(fmap.get("department", ""), "") or "").strip() or None,
+                    "class_name": str(row.get(fmap.get("class_name", ""), "") or "").strip() or None,
+                })
+            except Exception as e:
+                errors.append({"row": i, "error": str(e)})
+
+        return {
+            "valid_rows": len(preview),
+            "error_count": len(errors),
+            "preview": preview[:50],  # first 50
+            "errors": errors[:20],
+            "total": len(preview) + len(errors),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Parse error: {str(e)}")
+
+
+@app.post("/students/bulk-import/commit")
+def bulk_import_commit(request: Request, data: BulkImportCommitRequest,
+                       user=Depends(require_role("admin", "teacher"))):
+    """Commit validated rows to the database."""
+    if not data.rows:
+        raise HTTPException(400, "No rows to import")
+
+    imported = 0
+    failed = []
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        for i, row in enumerate(data.rows):
+            try:
+                name = str(row.get("name", "")).strip()
+                marks = row.get("marks", [])
+                subjects = row.get("subjects", [])
+                if not name or not marks or not subjects:
+                    failed.append({"row": i, "error": "missing required fields"})
+                    continue
+
+                stats = calculate_statistics(marks)
+                grade, _ = determine_grade(stats["average"])
+                cursor.execute(_q("""INSERT INTO students (name, marks, subjects, grade, average,
+                                          total_marks, timestamp, semester, batch_year, department, class_name)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""),
+                    (name, json.dumps(marks), json.dumps(subjects), grade,
+                     stats["average"], stats["total"], datetime.now().isoformat(),
+                     row.get("semester"), row.get("batch_year"),
+                     row.get("department"), row.get("class_name")))
+                imported += 1
+            except Exception as e:
+                failed.append({"row": i, "error": str(e)})
+        conn.commit()
+
+    return {
+        "message": f"Imported {imported} students",
+        "imported": imported,
+        "failed_count": len(failed),
+        "failed": failed[:20],
+    }
+
+
+# ============================================================
+# CLASSES
 # ============================================================
 @app.post("/classes/create")
 def create_class(request: Request, data: ClassCreate, admin=Depends(require_admin)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         try:
-            cursor.execute("""
-                INSERT INTO classes (name, department, teacher_id)
-                VALUES (?, ?, ?)
-            """, (data.name, data.department, data.teacher_id))
+            cursor.execute(_q("""INSERT INTO classes (name, department, teacher_id)
+                VALUES (?, ?, ?)"""), (data.name, data.department, data.teacher_id))
             conn.commit()
-        except sqlite3.IntegrityError:
+        except Exception:
             raise HTTPException(400, "Class already exists")
-    return {"message": "Class created", "id": cursor.lastrowid}
+    return {"message": "Class created"}
 
 
 @app.get("/classes")
@@ -3046,7 +3184,7 @@ def list_classes(user=Depends(require_user)):
 def delete_class(class_id: int, admin=Depends(require_admin)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM classes WHERE id=?", (class_id,))
+        cursor.execute(_q("DELETE FROM classes WHERE id=?"), (class_id,))
         if cursor.rowcount == 0:
             raise HTTPException(404, "Class not found")
         conn.commit()
@@ -3059,24 +3197,26 @@ def assign_students(data: ClassAssignRequest, admin=Depends(require_admin)):
         cursor = conn.cursor()
         updated = 0
         for sid in data.student_ids:
-            cursor.execute("UPDATE students SET class_name=? WHERE id=?",
-                           (data.class_name, sid))
+            cursor.execute(_q("UPDATE students SET class_name=? WHERE id=?"), (data.class_name, sid))
             updated += cursor.rowcount
         conn.commit()
-    return {"message": f"Assigned {updated} students to {data.class_name}",
-            "updated": updated}
+    return {"message": f"Assigned {updated} students to {data.class_name}", "updated": updated}
 
 
 @app.get("/classes/{class_name}/analytics")
 def class_analytics(class_name: str, user=Depends(require_user)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM students WHERE class_name=?", (class_name,))
+        cursor.execute(_q("SELECT * FROM students WHERE class_name=?"), (class_name,))
         students = []
         for r in cursor.fetchall():
             s = dict(r)
-            s["marks"] = json.loads(s["marks"])
-            s["subjects"] = json.loads(s["subjects"])
+            try:
+                s["marks"] = json.loads(s["marks"]) if isinstance(s["marks"], str) else s["marks"]
+                s["subjects"] = json.loads(s["subjects"]) if isinstance(s["subjects"], str) else s["subjects"]
+            except Exception:
+                s["marks"] = []
+                s["subjects"] = []
             students.append(s)
 
         if not students:
@@ -3085,7 +3225,6 @@ def class_analytics(class_name: str, user=Depends(require_user)):
 
         avgs = [s["average"] for s in students]
         grades = [s["grade"] for s in students]
-
         dist = {}
         for g in grades:
             dist[g] = dist.get(g, 0) + 1
@@ -3128,54 +3267,44 @@ def class_names(user=Depends(require_user)):
 
 
 # ============================================================
-# EXCEL EXPORT
+# EXPORT
 # ============================================================
 @app.get("/export/excel")
 def export_excel(user=Depends(require_user)):
     try:
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment
-
         students = get_accessible_students(user)
         if not students:
             raise HTTPException(404, "No data")
-
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Students"
-
         headers = ["ID", "Name", "Marks", "Subjects", "Grade", "Average",
                    "Total", "Semester", "Department", "Class", "Batch Year", "Created"]
         ws.append(headers)
-
         header_fill = PatternFill(start_color="667EEA", end_color="667EEA", fill_type="solid")
         header_font = Font(bold=True, color="FFFFFF")
         for cell in ws[1]:
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center")
-
         for s in students:
             ws.append([
                 s["id"], s["name"],
                 ", ".join(str(m) for m in s["marks"]),
                 ", ".join(s["subjects"]),
                 s["grade"], s["average"], s["total_marks"],
-                s.get("semester") or "",
-                s.get("department") or "",
-                s.get("class_name") or "",
-                s.get("batch_year") or "",
+                s.get("semester") or "", s.get("department") or "",
+                s.get("class_name") or "", s.get("batch_year") or "",
                 s.get("created_at") or "",
             ])
-
         for col in ws.columns:
             max_len = max(len(str(cell.value or "")) for cell in col)
             ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 50)
-
         buf = io.BytesIO()
         wb.save(buf)
         buf.seek(0)
-
         return StreamingResponse(
             buf,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -3190,9 +3319,6 @@ def export_excel(user=Depends(require_user)):
         raise HTTPException(500, f"Excel export error: {str(e)}")
 
 
-# ============================================================
-# CSV IMPORT/EXPORT
-# ============================================================
 @app.get("/students/import-template")
 def get_import_template(user=Depends(require_role("admin", "teacher"))):
     template = """name,marks,subjects,semester,department,batch_year,class_name
@@ -3216,77 +3342,17 @@ async def import_csv(user=Depends(require_role("admin", "teacher")),
                 continue
         if text is None:
             raise HTTPException(400, "Cannot decode file")
-
-        reader = csv_module.DictReader(io.StringIO(text))
-        fmap = {f.lower().strip(): f for f in (reader.fieldnames or [])}
-        missing = [r for r in ["name", "marks", "subjects"] if r not in fmap]
-        if missing:
-            raise HTTPException(400, f"Missing columns: {missing}")
-
-        imported = 0
-        failed = []
-        row_num = 1
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            for row in reader:
-                row_num += 1
-                try:
-                    name = str(row.get(fmap["name"], "")).strip()
-                    if not name:
-                        failed.append(f"Row {row_num}: empty name")
-                        continue
-                    marks_raw = str(row.get(fmap["marks"], "")).strip()
-                    marks = []
-                    for sep in [",", ";", "|"]:
-                        if sep in marks_raw:
-                            marks = [float(m.strip()) for m in marks_raw.split(sep) if m.strip()]
-                            break
-                    if not marks:
-                        marks = [float(marks_raw)]
-
-                    subj_raw = str(row.get(fmap["subjects"], "")).strip()
-                    subjects = []
-                    for sep in [",", ";", "|"]:
-                        if sep in subj_raw:
-                            subjects = [s.strip() for s in subj_raw.split(sep) if s.strip()]
-                            break
-                    if not subjects:
-                        subjects = [subj_raw]
-
-                    if len(marks) != len(subjects):
-                        failed.append(f"Row {row_num}: marks/subjects mismatch")
-                        continue
-                    if any(m < 0 or m > 100 for m in marks):
-                        failed.append(f"Row {row_num}: marks 0-100 only")
-                        continue
-
-                    for sname in subjects:
-                        ok, err = validate_subject_name(sname)
-                        if not ok:
-                            failed.append(f"Row {row_num}: {err}")
-                            break
-                    else:
-                        stats = calculate_statistics(marks)
-                        grade, _ = determine_grade(stats["average"])
-                        semester = str(row.get(fmap.get("semester", ""), "") or "").strip() or None
-                        dept = str(row.get(fmap.get("department", ""), "") or "").strip() or None
-                        by = str(row.get(fmap.get("batch_year", ""), "") or "").strip() or None
-                        cn = str(row.get(fmap.get("class_name", ""), "") or "").strip() or None
-
-                        cursor.execute("""
-                            INSERT INTO students (name, marks, subjects, grade, average,
-                                                  total_marks, timestamp, semester,
-                                                  batch_year, department, class_name)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (name, json.dumps(marks), json.dumps(subjects), grade,
-                              stats["average"], stats["total"], datetime.now().isoformat(),
-                              semester, by, dept, cn))
-                        imported += 1
-                except Exception as e:
-                    failed.append(f"Row {row_num}: {str(e)}")
-            conn.commit()
-        return {"message": f"Imported {imported}", "imported": imported,
-                "failed_count": len(failed), "failed": failed[:20]}
+        data = BulkImportPreviewRequest(csv_text=text)
+        preview_result = bulk_import_preview(None, data, user)
+        if preview_result["error_count"] > 0:
+            return {
+                "message": f"Found {preview_result['error_count']} errors. Use preview to inspect.",
+                "imported": 0,
+                "failed_count": preview_result["error_count"],
+                "failed": preview_result["errors"],
+            }
+        commit_data = BulkImportCommitRequest(rows=preview_result["preview"])
+        return bulk_import_commit(None, commit_data, user)
     except HTTPException:
         raise
     except Exception as e:
@@ -3387,21 +3453,17 @@ def record_attendance(att: AttendanceRecord,
                      user=Depends(require_role("admin", "teacher"))):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name FROM students WHERE id=?", (att.student_id,))
-        s = cursor.fetchone()
-        if not s:
+        cursor.execute(_q("SELECT id, name FROM students WHERE id=?"), (att.student_id,))
+        if not cursor.fetchone():
             raise HTTPException(404, "Student not found")
-        cursor.execute("""
-            INSERT INTO attendance (student_id, date, status, subject, notes)
-            VALUES (?, ?, ?, ?, ?)
-        """, (att.student_id, att.date, att.status, att.subject, att.notes))
+        cursor.execute(_q("""INSERT INTO attendance (student_id, date, status, subject, notes)
+            VALUES (?, ?, ?, ?, ?)"""),
+            (att.student_id, att.date, att.status, att.subject, att.notes))
         if att.status in ["Absent", "Late"]:
-            cursor.execute(
-                "INSERT INTO notifications (student_id, message, type) VALUES (?, ?, ?)",
-                (att.student_id, f"Marked {att.status} on {att.date}", "Warning"))
+            cursor.execute(_q("INSERT INTO notifications (student_id, message, type) VALUES (?, ?, ?)"),
+                           (att.student_id, f"Marked {att.status} on {att.date}", "Warning"))
         conn.commit()
-        new_id = cursor.lastrowid
-    return {"message": "Recorded", "id": new_id}
+    return {"message": "Recorded"}
 
 
 @app.get("/attendance/stats/overall")
@@ -3409,7 +3471,8 @@ def attendance_overall(user=Depends(require_user)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) as t FROM attendance")
-        total = cursor.fetchone()["t"]
+        row = cursor.fetchone()
+        total = row["t"] if isinstance(row, dict) else row[0]
         if total == 0:
             return {"total_records": 0, "message": "No records"}
         cursor.execute("SELECT status, COUNT(*) as c FROM attendance GROUP BY status")
@@ -3430,26 +3493,22 @@ def attendance_stats(student_id: int, user=Depends(require_user)):
         raise HTTPException(403, "Access denied")
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT name FROM students WHERE id=?", (student_id,))
+        cursor.execute(_q("SELECT name FROM students WHERE id=?"), (student_id,))
         s = cursor.fetchone()
         if not s:
             raise HTTPException(404, "Student not found")
-        cursor.execute(
-            "SELECT status, COUNT(*) as c FROM attendance WHERE student_id=? GROUP BY status",
-            (student_id,))
+        cursor.execute(_q("SELECT status, COUNT(*) as c FROM attendance WHERE student_id=? GROUP BY status"), (student_id,))
         st = {r["status"]: r["c"] for r in cursor.fetchall()}
         total = sum(st.values())
         if total == 0:
             return {"student_id": student_id, "student_name": s["name"],
                     "total_days": 0, "attendance_rate": 0, "message": "No records"}
         present = st.get("Present", 0)
-        return {
-            "student_id": student_id, "student_name": s["name"],
-            "total_days": total, "present": present,
-            "absent": st.get("Absent", 0), "late": st.get("Late", 0),
-            "excused": st.get("Excused", 0),
-            "attendance_rate": round(present / total * 100, 2),
-        }
+        return {"student_id": student_id, "student_name": s["name"],
+                "total_days": total, "present": present,
+                "absent": st.get("Absent", 0), "late": st.get("Late", 0),
+                "excused": st.get("Excused", 0),
+                "attendance_rate": round(present / total * 100, 2)}
 
 
 # ============================================================
@@ -3464,14 +3523,10 @@ def get_notifications(user=Depends(require_user), limit: int = 50):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         ph = ",".join("?" * len(ids))
-        cursor.execute(f"""
-            SELECT * FROM notifications WHERE student_id IN ({ph})
-            ORDER BY created_at DESC LIMIT ?
-        """, ids + [limit])
+        cursor.execute(_q(f"""SELECT * FROM notifications WHERE student_id IN ({ph})
+            ORDER BY created_at DESC LIMIT ?"""), ids + [limit])
         notifs = [dict(r) for r in cursor.fetchall()]
-        cursor.execute(
-            f"SELECT COUNT(*) as c FROM notifications WHERE student_id IN ({ph}) AND is_read=0",
-            ids)
+        cursor.execute(_q(f"SELECT COUNT(*) as c FROM notifications WHERE student_id IN ({ph}) AND is_read=0"), ids)
         unread = cursor.fetchone()["c"]
         return {"count": len(notifs), "unread_count": unread, "notifications": notifs}
 
@@ -3480,7 +3535,7 @@ def get_notifications(user=Depends(require_user), limit: int = 50):
 def mark_read(notif_id: int, user=Depends(require_user)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE notifications SET is_read=1 WHERE id=?", (notif_id,))
+        cursor.execute(_q("UPDATE notifications SET is_read=1 WHERE id=?"), (notif_id,))
         conn.commit()
     return {"message": "Read"}
 
@@ -3494,7 +3549,7 @@ def mark_all_read(user=Depends(require_user)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         ph = ",".join("?" * len(ids))
-        cursor.execute(f"UPDATE notifications SET is_read=1 WHERE student_id IN ({ph})", ids)
+        cursor.execute(_q(f"UPDATE notifications SET is_read=1 WHERE student_id IN ({ph})"), ids)
         conn.commit()
     return {"message": "All read"}
 
@@ -3520,8 +3575,7 @@ def overall_stats(user=Depends(require_user)):
         "lowest_average": round(float(min(avgs)), 2),
         "grade_distribution": dist,
         "pass_rate": round(sum(1 for s in students if s["grade"] != "F") / len(students) * 100, 2),
-        "distinction_rate": round(
-            sum(1 for s in students if s["grade"] in ["A", "A+"]) / len(students) * 100, 2),
+        "distinction_rate": round(sum(1 for s in students if s["grade"] in ["A", "A+"]) / len(students) * 100, 2),
         "top_performers": sorted(students, key=lambda x: x["average"], reverse=True)[:5],
     }
 
@@ -3572,8 +3626,7 @@ def analytics_dashboard(user=Depends(require_user)):
         "lowest_average": round(float(min(avgs)), 2),
         "passed": passed, "failed": len(students) - passed,
         "pass_rate": round(passed / len(students) * 100, 2),
-        "distinction_rate": round(
-            sum(1 for g in grades if g in ["A", "A+"]) / len(students) * 100, 2),
+        "distinction_rate": round(sum(1 for g in grades if g in ["A", "A+"]) / len(students) * 100, 2),
         "grade_distribution": dist, "grade_ranges": ranges,
         "subject_analytics": subj_analytics,
         "top_performers": sorted([
@@ -3611,21 +3664,13 @@ def report_card(student_id: int, user=Depends(require_user)):
 
 
 @app.get("/students/{student_id}/report-card/{template}")
-def report_card_template(
-    student_id: int,
-    template: str = "modern",
-    user=Depends(require_user),
-):
-    """Generate report card with chosen template."""
+def report_card_template(student_id: int, template: str = "modern", user=Depends(require_user)):
     student = next((s for s in get_accessible_students(user) if s["id"] == student_id), None)
     if not student:
         raise HTTPException(404, "Not found")
-
     student["recommendations"] = generate_recommendations(student["marks"], student["average"])
-
     fname = f"report_{student_id}_{template}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     fpath = os.path.join(REPORTS_DIR, fname)
-
     try:
         if template == "modern" and generate_modern_report:
             generate_modern_report(student, fpath)
@@ -3637,7 +3682,6 @@ def report_card_template(
             generate_report_card(student, fpath)
         else:
             raise HTTPException(400, f"Unknown template: {template}")
-
         return FileResponse(fpath, media_type="application/pdf", filename=fname)
     except HTTPException:
         raise
@@ -3654,7 +3698,8 @@ def process_queue_manual(admin=Depends(require_admin)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) as c FROM email_queue WHERE sent=0")
-        pending = cursor.fetchone()["c"]
+        row = cursor.fetchone()
+        pending = row["c"] if isinstance(row, dict) else row[0]
     return {"message": "Queue processed", "pending": pending}
 
 
@@ -3667,30 +3712,25 @@ async def websocket_notifications(websocket: WebSocket, token: str = Query("")):
     if not payload:
         await websocket.close(code=4001)
         return
-
     username = payload.get("sub")
     if not username:
         await websocket.close(code=4001)
         return
-
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id FROM users WHERE username=? AND is_active=1", (username,))
+        cursor.execute(_q("SELECT id FROM users WHERE username=? AND is_active=1"), (username,))
         row = cursor.fetchone()
         if not row:
             await websocket.close(code=4001)
             return
         user_id = row["id"]
-
     await manager.connect(websocket, user_id)
-
     try:
         await websocket.send_json({
             "type": "connected",
             "message": "Real-time notifications active",
             "user_id": user_id,
         })
-
         while True:
             try:
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30)
@@ -3700,17 +3740,13 @@ async def websocket_notifications(websocket: WebSocket, token: str = Query("")):
                 await websocket.send_json({"type": "heartbeat"})
     except WebSocketDisconnect:
         manager.disconnect(websocket, user_id)
-        print(f"[WS] User {user_id} disconnected")
     except Exception as e:
         manager.disconnect(websocket, user_id)
-        print(f"[WS] Error: {e}")
 
 
 @app.get("/ws/test")
 def ws_test(user=Depends(require_user)):
-    """Test endpoint to trigger a live event."""
     log_live_event(user["id"], "test", {"message": "This is a test notification"})
-
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -3722,7 +3758,6 @@ def ws_test(user=Depends(require_user)):
         loop.close()
     except Exception as e:
         return {"message": f"Event logged but WS send failed: {e}"}
-
     return {"message": "Test event sent"}
 
 
@@ -3747,17 +3782,11 @@ def auto_backup():
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_filename = f"auto_backup_{timestamp}.zip"
         backup_path = os.path.join(BACKUP_DIR, "auto", backup_filename)
-
         with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.write(DB_PATH, "student_marks.db")
-
         print(f"[AUTO-BACKUP] {backup_filename}")
-
         auto_dir = os.path.join(BACKUP_DIR, "auto")
-        files = sorted(
-            [f for f in os.listdir(auto_dir) if f.endswith(".zip")],
-            reverse=True,
-        )
+        files = sorted([f for f in os.listdir(auto_dir) if f.endswith(".zip")], reverse=True)
         for old in files[7:]:
             try:
                 os.remove(os.path.join(auto_dir, old))
@@ -3796,51 +3825,61 @@ def shutdown_event():
 def home():
     return {
         "message": "Student Marks Analyzer API",
-        "version": "11.0.0",
+        "version": "12.0.0",
+        "database": "PostgreSQL" if USE_POSTGRES else "SQLite",
         "features": [
             "OTP email verification",
-            "username/email login",
             "2FA (TOTP)",
             "parent-child linking",
-            "bulk operations",
+            "bulk operations + bulk import preview",
             "class/cohort analytics",
             "student profiles",
             "Excel/CSV/JSON export",
-            "PDF report cards",
+            "PDF report cards (3 templates)",
             "email notifications",
+            "notification preferences",
             "multi-language (EN/HI)",
+            "theme per-user (dark/light)",
             "audit logs",
             "role history",
-            "backup admin",
-            "self-demotion protection",
             "student photo upload",
             "exams & timetable",
             "assignments tracker",
             "fee management",
             "saved filters",
             "database backup & restore",
-            "scheduled reports",
+            "scheduled reports + upcoming",
             "whatsapp OTP",
             "websocket notifications",
-            "customizable PDF templates",
             "attendance heatmap",
+            "ML predictions + at-risk",
+            "PostgreSQL-ready",
         ],
     }
+
 
 @app.get("/favicon.ico")
 def favicon():
     return Response(status_code=204)
 
+
 @app.get("/health")
 def health():
     try:
         with get_db_connection() as conn:
-            conn.execute("SELECT 1")
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
         db = "healthy"
-    except Exception:
+    except Exception as e:
+        print(f"[HEALTH ERROR] {e}")
         db = "unhealthy"
-    return {"status": "healthy" if db == "healthy" else "degraded",
-            "database": db, "timestamp": datetime.now().isoformat()}
+    return {
+        "status": "healthy" if db == "healthy" else "degraded",
+        "database": db,
+        "database_type": "PostgreSQL" if USE_POSTGRES else "SQLite",
+        "timestamp": datetime.now().isoformat(),
+    }
 
 
 if __name__ == "__main__":

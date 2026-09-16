@@ -79,6 +79,7 @@ TRANSLATIONS = {
         "filters": "🔍 Saved Filters",
         "live": "🔔 Live Feed",
         "pdf_templates": "📄 PDF Templates",
+        "ml": "🤖 ML Insights",
     },
     "hi": {
         "dashboard": "🏠 डैशबोर्ड",
@@ -112,6 +113,7 @@ TRANSLATIONS = {
         "filters": "🔍 सहेजे गए फ़िल्टर",
         "live": "🔔 लाइव फ़ीड",
         "pdf_templates": "📄 PDF टेम्पलेट",
+        "ml": "🤖 एमएल अंतर्दृष्टि",
     },
 }
 
@@ -752,7 +754,7 @@ with st.sidebar:
             t("assignments"), t("fees"), t("classes"), t("parent_links"),
             t("profile"), t("filters"), t("live"), t("notifications"),
             t("scheduled_reports"), t("backup"), t("pdf_templates"),
-            t("users"), t("audit"), t("security"),
+            t("users"), t("audit"), t("security"), t("ml"),
         ]
         menu_icons = [
             "house", "pencil-square", "database", "bar-chart",
@@ -760,7 +762,7 @@ with st.sidebar:
             "journal-check", "cash-coin", "building", "people",
             "person-circle", "funnel", "broadcast", "bell",
             "envelope-paper", "cloud-download", "file-pdf",
-            "person-badge", "journal-text", "shield-lock",
+            "person-badge", "journal-text", "shield-lock", "robot",
         ]
     elif user_role == "teacher":
         menu_options = [
@@ -768,12 +770,13 @@ with st.sidebar:
             t("reports"), t("attendance"), t("exams"), t("timetable"),
             t("assignments"), t("fees"), t("classes"), t("profile"),
             t("filters"), t("live"), t("notifications"), t("pdf_templates"),
+            t("ml"),
         ]
         menu_icons = [
             "house", "pencil-square", "database", "bar-chart",
             "file-earmark-text", "calendar", "calendar-check", "calendar-week",
             "journal-check", "cash-coin", "building", "person-circle",
-            "funnel", "broadcast", "bell", "file-pdf",
+            "funnel", "broadcast", "bell", "file-pdf", "robot",
         ]
     elif user_role == "parent":
         menu_options = [
@@ -2515,7 +2518,144 @@ elif selected == t("import_export"):
                     st.download_button("💾 Save .xlsx", data=r.content,
                                        file_name="students.xlsx",
                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+# ============================================================
+# PAGE: ML INSIGHTS
+# ============================================================
+elif selected == t("ml"):
+    st.markdown(f'<div class="main-header"><h1>{t("ml")}</h1><p>AI-powered grade prediction and at-risk detection</p></div>', unsafe_allow_html=True)
 
+    # Model status
+    r = api_get("/ml/status")
+    status = handle_response(r, show_error=False) if r else None
+
+    if not status:
+        st.error("Cannot reach ML endpoints. Is the backend running?")
+    elif not status.get("available"):
+        st.error("❌ scikit-learn not installed on backend")
+        st.code("pip install scikit-learn joblib numpy")
+    else:
+        meta = status.get("meta", {})
+        c1, c2, c3 = st.columns(3)
+
+        with c1:
+            if status.get("trained"):
+                st.success("✅ Model Trained")
+            else:
+                st.warning("⚠️ Model Not Trained")
+
+        with c2:
+            st.metric("Training Samples", meta.get("samples", 0))
+
+        with c3:
+            if meta.get("grade_r2"):
+                st.metric("Model R²", f"{meta['grade_r2']:.2f}")
+
+        if status.get("trained") and meta.get("trained_at"):
+            st.caption(f"Last trained: {meta['trained_at'][:19]} UTC")
+
+        st.markdown("---")
+
+        tab1, tab2, tab3 = st.tabs(["🎯 Predict", "🚨 At-Risk", "🔄 Train Model"])
+
+        # -------- TAB 1: PREDICT --------
+        with tab1:
+            st.markdown("### Predict Student's Next Score")
+
+            r = api_get("/students", params={"limit": 500})
+            data = handle_response(r, show_error=False) if r else None
+            students = data.get("students", []) if data else []
+
+            if not students:
+                st.info("No students yet. Add students first via the Analyze page.")
+            else:
+                opts = {f"{s['name']} (ID {s['id']})": s["id"] for s in students}
+                sel = st.selectbox("Select student", list(opts.keys()), key="ml_predict_sel")
+                sid = opts[sel]
+
+                if st.button("🔮 Predict Next Score", type="primary", use_container_width=True):
+                    r = api_get(f"/ml/predict/{sid}")
+                    res = handle_response(r, show_error=False) if r else None
+
+                    if not res:
+                        st.error("Prediction failed. Check backend logs.")
+                    elif "error" in res.get("prediction", {}):
+                        st.warning(res["prediction"]["error"])
+                        st.info("Go to **Train Model** tab and train the model first.")
+                    else:
+                        pred = res["prediction"]
+                        risk = res["risk"]
+
+                        c1, c2, c3, c4 = st.columns(4)
+                        with c1:
+                            render_metric("🎯", f"{pred['predicted_score']}%", "Predicted")
+                        with c2:
+                            render_metric("📊", f"{pred['current_average']}%", "Current")
+                        with c3:
+                            trend_icon = {"improving": "📈", "declining": "📉", "stable": "➡️"}.get(pred["trend"], "❓")
+                            render_metric(trend_icon, pred["trend"].title(), "Trend")
+                        with c4:
+                            risk_pct = int(risk["probability"] * 100)
+                            render_metric(
+                                "⚠️" if risk["at_risk"] else "✅",
+                                f"{risk_pct}%",
+                                "Risk Level"
+                            )
+
+                        st.markdown(f"**Confidence range:** {pred['confidence_low']}% – {pred['confidence_high']}%")
+
+                        if res.get("recommendations"):
+                            st.markdown("### 💡 Recommendations")
+                            for rec in res["recommendations"]:
+                                st.markdown(f'<div class="recommendation-card">{rec}</div>', unsafe_allow_html=True)
+
+        # -------- TAB 2: AT-RISK --------
+        with tab2:
+            st.markdown("### Students At Risk")
+            st.caption("Students flagged by the ML model as likely to struggle")
+
+            if st.button("🔍 Find At-Risk Students", type="primary", use_container_width=True):
+                r = api_get("/ml/at-risk")
+                res = handle_response(r, show_error=False) if r else None
+
+                if not res:
+                    st.error("Failed to load")
+                elif res["count"] == 0:
+                    st.success("🎉 No at-risk students detected!")
+                else:
+                    st.error(f"⚠️ {res['count']} student(s) at risk")
+                    df = pd.DataFrame(res["students"])
+                    df["probability"] = df["probability"].apply(lambda x: f"{x*100:.0f}%")
+                    st.dataframe(df, use_container_width=True)
+
+        # -------- TAB 3: TRAIN --------
+        with tab3:
+            st.markdown("### Train the Model")
+            st.caption("Trains on all students with marks data. Needs at least 5 students.")
+
+            if user_role not in ["admin", "teacher"]:
+                st.info("Only admins and teachers can train the model.")
+            else:
+                st.warning("⚠️ Training will overwrite the existing model.")
+                if st.button("🚀 Train Model Now", type="primary", use_container_width=True):
+                    with st.spinner("Training... (takes 5-10 seconds)"):
+                        r = api_post("/ml/train")
+                        res = handle_response(r, show_error=False) if r else None
+
+                    if not res:
+                        st.error("Training failed — backend error")
+                    elif res.get("error"):
+                        st.error(res["error"])
+                        if res.get("hint"):
+                            st.info(res["hint"])
+                    elif res.get("ok"):
+                        st.success("✅ Model trained successfully!")
+                        st.balloons()
+                        c1, c2, c3 = st.columns(3)
+                        with c1: st.metric("Samples", res["samples"])
+                        with c2: st.metric("Grade MAE", f"±{res['grade_mae']}%")
+                        with c3: st.metric("Model R²", f"{res['grade_r2']:.2f}")
+                        time.sleep(1)
+                        st.rerun()
 
 # ============================================================
 # FOOTER
