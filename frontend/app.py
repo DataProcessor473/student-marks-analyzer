@@ -2412,7 +2412,7 @@ elif selected == t("assignments"):
 elif selected == t("fees"):
     st.markdown(f'<div class="main-header"><h1>{t("fees")}</h1><p>Fee structure and payments</p></div>', unsafe_allow_html=True)
 
-    tab1, tab2, tab3 = st.tabs(["💵 Payments", "📋 Structure", "➕ Record Payment"])
+    tab1, tab2, tab3, tab4 = st.tabs(["💵 Payments", "📋 Structure", "➕ Record Payment", "⏰ Reminders"])
 
     with tab1:
         r = api_get("/fees/payments")
@@ -2571,6 +2571,90 @@ elif selected == t("fees"):
                                 st.error(r.json().get("detail", "Failed"))
 
 
+
+
+    with tab4:
+        st.markdown("### ⏰ Fee Reminders")
+        st.caption("Automated email reminders for pending fees. Runs daily at 9 AM UTC.")
+
+        if user_role != "admin":
+            st.info("Only admins can view and manage fee reminders.")
+        else:
+            # Action row
+            _rm_c1, _rm_c2, _rm_c3 = st.columns([2, 2, 3])
+
+            with _rm_c1:
+                _rm_days = st.number_input(
+                    "Days ahead",
+                    min_value=1, max_value=30, value=2,
+                    help="Include payments due within this many days",
+                    key="fee_rm_days",
+                )
+
+            with _rm_c2:
+                st.markdown("&nbsp;", unsafe_allow_html=True)
+                if st.button("🔍 Preview", use_container_width=True, key="fee_rm_preview_btn"):
+                    _pr = api_get(f"/fees/reminders/preview?days_ahead={_rm_days}")
+                    _pd = handle_response(_pr, show_error=False) if _pr else None
+                    if _pd:
+                        st.session_state["fee_rm_preview"] = _pd
+
+            with _rm_c3:
+                st.markdown("&nbsp;", unsafe_allow_html=True)
+                if st.button("🚀 Run Reminders Now", type="primary", use_container_width=True, key="fee_rm_run_btn"):
+                    with st.spinner("Sending reminders..."):
+                        _rn = api_post(f"/fees/reminders/run-now?days_ahead={_rm_days}")
+                        _rnd = handle_response(_rn, show_error=False) if _rn else None
+                    if _rnd:
+                        _s = _rnd.get("summary", {})
+                        st.success(
+                            f"✅ Done — sent: {_s.get('sent',0)}, "
+                            f"skipped: {_s.get('skipped',0)}, "
+                            f"failed: {_s.get('failed',0)}, "
+                            f"total: {_s.get('total',0)}"
+                        )
+                        st.balloons()
+                        st.session_state.pop("fee_rm_preview", None)
+
+            # Preview results
+            _prev = st.session_state.get("fee_rm_preview")
+            if _prev:
+                st.markdown("---")
+                st.markdown(f"#### 📋 Preview (next {_prev.get('days_ahead', 0)} days)")
+                _preview_payments = _prev.get("payments", [])
+                if not _preview_payments:
+                    st.info("No pending payments in this window — no reminders would be sent.")
+                else:
+                    import pandas as _pd
+                    _pdf = _pd.DataFrame(_preview_payments)
+                    st.caption(f"{len(_preview_payments)} payment(s) would receive a reminder")
+                    st.dataframe(_pdf, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+
+            # Reminder log
+            st.markdown("#### 📜 Recent Reminders")
+            _lg = api_get("/fees/reminders?limit=50")
+            _lgd = handle_response(_lg, show_error=False) if _lg else None
+            _logs = _lgd.get("reminders", []) if _lgd else []
+
+            if not _logs:
+                st.info("No reminders sent yet.")
+            else:
+                import pandas as _pd2
+                _ldf = _pd2.DataFrame(_logs)
+                _show_cols = ["sent_at", "student_name", "fee_type", "amount", "sent_to", "status", "error"]
+                _avail = [c for c in _show_cols if c in _ldf.columns]
+                st.dataframe(_ldf[_avail], use_container_width=True, hide_index=True)
+
+                _counts = _ldf["status"].value_counts().to_dict() if "status" in _ldf.columns else {}
+                _sc1, _sc2, _sc3 = st.columns(3)
+                with _sc1:
+                    st.metric("✅ Sent", _counts.get("sent", 0))
+                with _sc2:
+                    st.metric("⚠️ Skipped", _counts.get("skipped", 0))
+                with _sc3:
+                    st.metric("❌ Failed", _counts.get("failed", 0))
 # ============================================================
 # PAGE: CLASSES
 # ============================================================
