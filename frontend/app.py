@@ -4594,16 +4594,142 @@ elif selected == t("my_children") and user_role == "parent":
 # STUDENT VIEW
 # ============================================================
 elif selected == t("my_results") and user_role == "student":
-    st.markdown(f'<div class="main-header"><h1>{t("my_results")}</h1></div>', unsafe_allow_html=True)
-    r = api_get("/students", params={"limit": 10})
-    data = handle_response(r, show_error=False) if r else None
-    if data and data["count"] > 0:
-        s = data["students"][0]
-        st.markdown(f"### 🎓 {s['name']}")
-        c1, c2, c3 = st.columns(3)
-        with c1: render_metric("📊", f"{s['average']:.2f}%", "Average")
-        with c2: render_metric("🏆", s["grade"], "Grade")
-        with c3: render_metric("📈", f"{s['total_marks']:.0f}", "Total")
+    st.markdown(f'<div class="main-header"><h1>📊 My Results</h1><p>Your academic performance at a glance</p></div>', unsafe_allow_html=True)
+
+    _me_resp = api_get("/students", params={"limit": 10})
+    _me_data = handle_response(_me_resp, show_error=False) if _me_resp else None
+    _my_students = _me_data.get("students", []) if _me_data else []
+
+    if not _my_students:
+        st.warning("Your account is not yet linked to a student record. Please contact your admin.")
+    else:
+        _me = _my_students[0]
+
+        # Hero card
+        _hero_col1, _hero_col2 = st.columns([1, 3])
+        with _hero_col1:
+            _photo_url = get_student_photo_url(_me.get("photo_url"))
+            if _photo_url:
+                try:
+                    _pr = requests.get(_photo_url, timeout=5)
+                    if _pr.status_code == 200:
+                        st.image(_pr.content, width=140)
+                    else:
+                        st.markdown("# 🎓")
+                except Exception:
+                    st.markdown("# 🎓")
+            else:
+                st.markdown("# 🎓")
+
+        with _hero_col2:
+            st.markdown(f"## Welcome back, {_me['name']}!")
+            st.caption(f"Class {_me.get('class_name','N/A')} · {_me.get('department','N/A')} · Semester {_me.get('semester','N/A')}")
+
+        st.markdown("---")
+
+        # Metric cards
+        _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+        with _mc1: render_metric("📊", f"{_me['average']:.1f}%", "Overall Average")
+        with _mc2: render_metric("🏆", _me["grade"], "Current Grade")
+        with _mc3: render_metric("📈", f"{_me['total_marks']:.0f}", "Total Marks")
+        with _mc4: render_metric("📚", len(_me.get("subjects", [])), "Subjects")
+
+        # Subject chart
+        if _me.get("subjects") and _me.get("marks"):
+            st.markdown("---")
+            st.markdown("### 📚 Subject-wise Performance")
+            _sdf = pd.DataFrame({"Subject": _me["subjects"], "Marks": _me["marks"]})
+            _sfig = px.bar(_sdf, x="Subject", y="Marks", color="Marks",
+                           color_continuous_scale="RdYlGn", text="Marks")
+            _sfig.update_traces(texttemplate="%{text:.0f}", textposition="outside")
+            _sfig.update_layout(yaxis_range=[0, 105], showlegend=False, height=350)
+            st.plotly_chart(style_chart(_sfig), use_container_width=True)
+
+        # Badges
+        st.markdown("---")
+        st.markdown("### 🏅 My Achievement Badges")
+        try:
+            _badge_r = api_get(f"/students/{_me['id']}/badges")
+            _badge_d = handle_response(_badge_r, show_error=False) if _badge_r else None
+            _my_badges = _badge_d.get("badges", []) if _badge_d else []
+        except Exception:
+            _my_badges = []
+
+        if not _my_badges:
+            st.info("No badges earned yet. Keep working hard!")
+        else:
+            _bcols = st.columns(min(len(_my_badges), 5))
+            for _i, _b in enumerate(_my_badges[:5]):
+                with _bcols[_i % 5]:
+                    st.markdown(
+                        '<div style="background:linear-gradient(135deg,#6366f1,#8b5cf6);border-radius:12px;'
+                        'padding:0.75rem;text-align:center;color:white;">'
+                        '<div style="font-size:2rem;">' + _b.get("icon", "🏅") + '</div>'
+                        '<div style="font-weight:600;font-size:0.8rem;margin-top:0.25rem;">' + _b.get("name", "") + '</div>'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+
+        # Attendance
+        st.markdown("---")
+        st.markdown("### 📅 Attendance Summary")
+        try:
+            _att_r = api_get(f"/attendance/{_me['id']}/stats")
+            _att_d = handle_response(_att_r, show_error=False) if _att_r else None
+        except Exception:
+            _att_d = None
+
+        if _att_d and _att_d.get("total_days", 0) > 0:
+            _ac1, _ac2, _ac3, _ac4 = st.columns(4)
+            with _ac1: st.metric("Present", _att_d.get("present", 0))
+            with _ac2: st.metric("Absent", _att_d.get("absent", 0))
+            with _ac3: st.metric("Late", _att_d.get("late", 0))
+            with _ac4: st.metric("Rate", str(_att_d.get("attendance_rate", 0)) + "%")
+            st.progress(min(_att_d.get("attendance_rate", 0) / 100, 1.0))
+        else:
+            st.info("No attendance records yet.")
+
+        # Recent notes (public)
+        st.markdown("---")
+        st.markdown("### 📝 Notes from Teachers")
+        try:
+            _nt_r = api_get(f"/students/{_me['id']}/notes")
+            _nt_d = handle_response(_nt_r, show_error=False) if _nt_r else None
+            _notes = _nt_d.get("notes", []) if _nt_d else []
+        except Exception:
+            _notes = []
+
+        if not _notes:
+            st.info("No notes from teachers.")
+        else:
+            _nt_icons = {"positive": "🟢", "concern": "🟠", "incident": "🔴", "observation": "🔵"}
+            for _n in _notes[:3]:
+                _ic = _nt_icons.get(_n.get("note_type"), "⚪")
+                st.markdown(
+                    '<div style="border-left:3px solid #6366f1;padding:0.5rem 1rem;background:rgba(99,102,241,0.06);'
+                    'border-radius:8px;margin:0.4rem 0;">'
+                    + _ic + ' <b>' + (_n.get("note_type") or "").title() + '</b> '
+                    '<span style="color:#6b7280;font-size:0.85rem;">— ' + (_n.get("author_name") or "") + ' · ' + (_n.get("created_at") or "")[:10] + '</span>'
+                    '<div style="margin-top:0.3rem;">' + (_n.get("content") or "") + '</div>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
+        # Report card download
+        st.markdown("---")
+        st.markdown("### 📄 Download My Report Card")
+        _rc1, _rc2 = st.columns([2, 1])
+        with _rc1:
+            _rc_tpl = st.selectbox("Template", ["classic", "modern", "minimal"], key="student_rc_tpl")
+        with _rc2:
+            st.markdown("&nbsp;", unsafe_allow_html=True)
+            if st.button("📄 Generate PDF", key="student_rc_btn", use_container_width=True):
+                _rc_endpoint = f"/students/{_me['id']}/report-card" if _rc_tpl == "classic" else f"/students/{_me['id']}/report-card/{_rc_tpl}"
+                _rc_resp = api_get(_rc_endpoint)
+                if _rc_resp and _rc_resp.status_code == 200:
+                    st.download_button("💾 Save PDF", data=_rc_resp.content,
+                                      file_name=f"my_report_{_me['id']}_{_rc_tpl}.pdf",
+                                      mime="application/pdf", key="student_rc_dl")
 
 
 # ============================================================
