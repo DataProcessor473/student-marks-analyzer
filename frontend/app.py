@@ -2443,12 +2443,53 @@ elif selected == t("timetable"):
                             "end_time": tend or None,
                         }
                         r = api_post("/timetable/create", json=payload)
+
                         if r and r.status_code == 200:
-                            st.success("Added!")
+                            _resp_data = r.json()
+                            if _resp_data.get("forced"):
+                                st.warning("Entry created with " + str(_resp_data.get("conflicts_bypassed", 0)) + " conflict(s) bypassed.")
+                            else:
+                                st.success("Added!")
                             time.sleep(0.5)
                             st.rerun()
+
+                        elif r and r.status_code == 409:
+                            # Conflict detected
+                            try:
+                                _detail = r.json().get("detail", {})
+                                _conflicts = _detail.get("conflicts", [])
+                            except Exception:
+                                _conflicts = []
+
+                            st.error("Timetable conflict detected!")
+                            for _c in _conflicts:
+                                st.warning(_c.get("message", "Conflict"))
+                                _existing = _c.get("existing", {})
+                                if _existing:
+                                    st.caption("Existing entry: " + str(_existing.get("class_name", "?")) + " - " + str(_existing.get("subject", "?")) + " - Period " + str(payload.get("period", "?")))
+
+                            _fc1, _fc2 = st.columns([1, 1])
+                            with _fc1:
+                                if st.button("🚫 Cancel", use_container_width=True, key="tt_cancel_btn"):
+                                    st.rerun()
+                            with _fc2:
+                                if st.button("⚠️ Force Create", use_container_width=True, key="tt_force_btn"):
+                                    _fr = api_post("/timetable/create?force=true", json=payload)
+                                    if _fr and _fr.status_code == 200:
+                                        st.success("Entry created (conflicts bypassed)")
+                                        st.balloons()
+                                        time.sleep(0.7)
+                                        st.rerun()
+                                    else:
+                                        st.error("Force create failed")
                         else:
-                            st.error(r.json().get("detail", "Failed"))
+                            try:
+                                _err = r.json().get("detail", "Failed")
+                                if isinstance(_err, dict):
+                                    _err = _err.get("message", str(_err))
+                            except Exception:
+                                _err = "Failed"
+                            st.error(str(_err))
         else:
             st.info("Only admins and teachers can add timetable entries")
 
