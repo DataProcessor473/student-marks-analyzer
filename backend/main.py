@@ -506,7 +506,61 @@ def generate_otp() -> str:
     return "".join(random.choices(string.digits, k=OTP_LENGTH))
 
 
+
+
+def _send_via_brevo_api(to_email: str, subject: str, html_body: str) -> bool:
+    api_key = os.getenv("BREVO_API_KEY", "").strip()
+    if not api_key:
+        return False
+    try:
+        import requests as _req
+        sender_email = SMTP_FROM or SMTP_USER
+        payload = {
+            "sender": {"name": "Student Marks Analyzer", "email": sender_email},
+            "to": [{"email": to_email}],
+            "subject": subject,
+            "htmlContent": html_body,
+        }
+        headers = {
+            "accept": "application/json",
+            "api-key": api_key,
+            "content-type": "application/json",
+        }
+        r = _req.post("https://api.brevo.com/v3/smtp/email",
+                      json=payload, headers=headers, timeout=15)
+        if r.status_code in (200, 201, 202):
+            print(f"[OK] Email sent via Brevo API to {to_email}")
+            return True
+        print(f"[ERROR] Brevo API: {r.status_code} {r.text[:200]}")
+        return False
+    except Exception as e:
+        print(f"[ERROR] Brevo API exception: {type(e).__name__}: {e}")
+        return False
+
 def send_email_otp(to_email: str, otp: str, purpose: str = "verification") -> bool:
+    if os.getenv("BREVO_API_KEY"):
+        purpose_label = {
+            "verification": "email verification",
+            "reset_password": "password reset",
+            "login": "login verification",
+        }.get(purpose, purpose)
+        html = f"""
+        <html><body style="font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5;">
+            <div style="max-width: 500px; margin: 0 auto; background: white; border-radius: 12px;
+                        padding: 30px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);">
+                <h2 style="color: #4f46e5; margin: 0 0 20px 0;">Student Marks Analyzer</h2>
+                <p style="color: #333; font-size: 16px;">Your <b>{purpose_label}</b> code is:</p>
+                <h1 style="background: #4f46e5; color: white;
+                           padding: 20px; border-radius: 12px; letter-spacing: 8px;
+                           text-align: center; font-size: 32px; margin: 20px 0;">{otp}</h1>
+                <p style="color: #666; font-size: 14px;">This code expires in <b>{OTP_EXPIRE_MINUTES} minutes</b>.</p>
+            </div>
+        </body></html>
+        """
+        if _send_via_brevo_api(to_email, f"Your verification code: {otp}", html):
+            return True
+        print("[WARN] Brevo API failed, falling back to SMTP")
+
     if not SMTP_USER or not SMTP_PASS or SMTP_USER == "your-email@gmail.com":
         print(f"[EMAIL OTP] SMTP not configured - would send to {to_email}: {otp}")
         return False
@@ -548,6 +602,9 @@ def send_email_otp(to_email: str, otp: str, purpose: str = "verification") -> bo
 
 
 def send_email_notification(to_email: str, subject: str, html_body: str) -> bool:
+    if os.getenv("BREVO_API_KEY"):
+        if _send_via_brevo_api(to_email, subject, html_body):
+            return True
     if not SMTP_USER or not SMTP_PASS:
         print(f"[EMAIL] would send to {to_email}: {subject}")
         return False
