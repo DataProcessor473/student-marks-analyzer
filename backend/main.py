@@ -4910,6 +4910,268 @@ def delete_grade_scheme(scheme_id: int, admin=Depends(require_admin)):
         raise HTTPException(500, f"Failed: {e}")
 
 
+
+
+# ============================================================
+# INVOICE PDF (Feature 8)
+# ============================================================
+def _number_to_words_inr(n: float) -> str:
+    """Convert a number to Indian Rupees in words."""
+    n = int(round(n))
+    if n == 0:
+        return "Zero Rupees Only"
+
+    ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+            "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
+            "Seventeen", "Eighteen", "Nineteen"]
+    tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
+
+    def two_digit(num):
+        if num < 20:
+            return ones[num]
+        return (tens[num // 10] + " " + ones[num % 10]).strip()
+
+    def three_digit(num):
+        if num < 100:
+            return two_digit(num)
+        return (ones[num // 100] + " Hundred " + two_digit(num % 100)).strip()
+
+    parts = []
+    crore = n // 10000000
+    n = n % 10000000
+    lakh = n // 100000
+    n = n % 100000
+    thousand = n // 1000
+    n = n % 1000
+    hundred = n
+
+    if crore:
+        parts.append(two_digit(crore) + " Crore")
+    if lakh:
+        parts.append(two_digit(lakh) + " Lakh")
+    if thousand:
+        parts.append(two_digit(thousand) + " Thousand")
+    if hundred:
+        parts.append(three_digit(hundred))
+
+    return " ".join(parts) + " Rupees Only"
+
+
+def _build_invoice_pdf(payment: dict, student: dict) -> bytes:
+    """Generate a PDF invoice for a payment. Returns bytes."""
+    try:
+        from fpdf import FPDF
+    except ImportError:
+        raise HTTPException(500, "fpdf2 not installed")
+
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # Header
+    pdf.set_fill_color(79, 70, 229)   # indigo
+    pdf.rect(0, 0, 210, 30, "F")
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_xy(15, 10)
+    pdf.cell(180, 10, "Student Marks Analyzer", 0, 1, "L")
+    pdf.set_font("Helvetica", "", 11)
+    pdf.set_xy(15, 20)
+    pdf.cell(180, 8, "FEE RECEIPT", 0, 1, "L")
+
+    # Reset text color
+    pdf.set_text_color(0, 0, 0)
+
+    # Invoice meta
+    pdf.set_xy(15, 40)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(40, 7, "Invoice No:", 0, 0)
+    pdf.set_font("Helvetica", "", 11)
+    _inv_no = f"INV-{datetime.now().strftime('%Y%m%d')}-{str(payment.get('id','0')).zfill(4)}"
+    pdf.cell(60, 7, _inv_no, 0, 0)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(30, 7, "Date:", 0, 0)
+    pdf.set_font("Helvetica", "", 11)
+    _date = (payment.get("payment_date") or datetime.now().date().isoformat())[:10]
+    pdf.cell(45, 7, _date, 0, 1)
+
+    # Student info
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(180, 8, "Billed To:", 0, 1)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(180, 7, f"Name:         {student.get('name', '-')}", 0, 1)
+    pdf.cell(180, 7, f"Student ID:   {student.get('id', '-')}", 0, 1)
+    if student.get("class_name"):
+        pdf.cell(180, 7, f"Class:        {student.get('class_name')}", 0, 1)
+    if student.get("department"):
+        pdf.cell(180, 7, f"Department:   {student.get('department')}", 0, 1)
+    if student.get("email"):
+        pdf.cell(180, 7, f"Email:        {student.get('email')}", 0, 1)
+
+    # Table header
+    pdf.ln(6)
+    pdf.set_fill_color(241, 245, 249)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(120, 9, "  Fee Type", 1, 0, "L", True)
+    pdf.cell(60, 9, "  Amount", 1, 1, "L", True)
+
+    # Table row
+    pdf.set_font("Helvetica", "", 11)
+    _fee_type = (payment.get("fee_type") or "Fee").title()
+    _amount = float(payment.get("amount") or 0)
+    pdf.cell(120, 9, f"  {_fee_type}", 1, 0, "L")
+    pdf.cell(60, 9, f"  Rs. {_amount:,.2f}", 1, 1, "L")
+
+    # Total
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_fill_color(16, 185, 129)
+    pdf.set_text_color(255, 255, 255)
+    pdf.cell(120, 9, "  TOTAL", 1, 0, "L", True)
+    pdf.cell(60, 9, f"  Rs. {_amount:,.2f}", 1, 1, "L", True)
+
+    # In words
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Helvetica", "I", 10)
+    pdf.cell(180, 8, f"In words: {_number_to_words_inr(_amount)}", 0, 1)
+
+    # Payment details
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(180, 7, "Payment Details:", 0, 1)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(180, 7, f"Method:          {(payment.get('payment_method') or 'Cash').upper()}", 0, 1)
+    if payment.get("transaction_id"):
+        pdf.cell(180, 7, f"Transaction ID:  {payment.get('transaction_id')}", 0, 1)
+    _status = (payment.get("status") or "paid").upper()
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(60, 8, "Status:", 0, 0)
+    if _status == "PAID":
+        pdf.set_text_color(16, 185, 129)
+    else:
+        pdf.set_text_color(217, 119, 6)
+    pdf.cell(120, 8, _status, 0, 1)
+
+    # Signature
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(20)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(120, 6, "", 0, 1)
+    pdf.cell(60, 6, "_________________________", 0, 1)
+    pdf.cell(60, 5, "Authorized Signature", 0, 1)
+
+    # Footer
+    pdf.set_y(-20)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(120, 120, 120)
+    pdf.cell(180, 5, "This is a computer-generated receipt. No physical signature required.", 0, 0, "C")
+
+    # Output
+    out = pdf.output(dest="S")
+    if isinstance(out, str):
+        return out.encode("latin-1")
+    return bytes(out)
+
+
+@app.get("/fees/payment/{payment_id}/invoice")
+def get_invoice_pdf(payment_id: int, user=Depends(require_user)):
+    """Return a PDF invoice for a specific payment."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                SELECT fp.*, s.name as student_name, s.class_name, s.department, s.email as student_email
+                FROM fee_payments fp
+                JOIN students s ON fp.student_id = s.id
+                WHERE fp.id = ?
+            """), (payment_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(404, "Payment not found")
+            payment = dict(row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"DB error: {e}")
+
+    # Access control: parents/students only see their own payments
+    if user["role"] in ("parent", "student"):
+        try:
+            accessible = get_accessible_students(user)
+            if not any(s["id"] == payment["student_id"] for s in accessible):
+                raise HTTPException(403, "Access denied")
+        except HTTPException:
+            raise
+
+    student = {
+        "id": payment.get("student_id"),
+        "name": payment.get("student_name") or f"Student {payment.get('student_id')}",
+        "class_name": payment.get("class_name"),
+        "department": payment.get("department"),
+        "email": payment.get("student_email"),
+    }
+
+    pdf_bytes = _build_invoice_pdf(payment, student)
+
+    filename = f"invoice_{payment_id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+class BulkInvoiceRequest(BaseModel):
+    payment_ids: List[int]
+
+
+@app.post("/fees/invoices/bulk")
+def get_bulk_invoices(data: BulkInvoiceRequest, user=Depends(require_role("admin", "teacher"))):
+    """Generate a ZIP containing invoices for multiple payments."""
+    if not data.payment_ids:
+        raise HTTPException(400, "No payment IDs provided")
+    if len(data.payment_ids) > 50:
+        raise HTTPException(400, "Too many payments (max 50)")
+
+    try:
+        import zipfile as _zip
+        import io as _io
+
+        buf = _io.BytesIO()
+        with _zip.ZipFile(buf, "w", _zip.ZIP_DEFLATED) as zf:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                for pid in data.payment_ids:
+                    cursor.execute(_q("""
+                        SELECT fp.*, s.name as student_name, s.class_name, s.department, s.email as student_email
+                        FROM fee_payments fp
+                        JOIN students s ON fp.student_id = s.id
+                        WHERE fp.id = ?
+                    """), (pid,))
+                    row = cursor.fetchone()
+                    if not row:
+                        continue
+                    payment = dict(row)
+                    student = {
+                        "id": payment.get("student_id"),
+                        "name": payment.get("student_name"),
+                        "class_name": payment.get("class_name"),
+                        "department": payment.get("department"),
+                        "email": payment.get("student_email"),
+                    }
+                    pdf_bytes = _build_invoice_pdf(payment, student)
+                    zf.writestr(f"invoice_{pid}_{payment.get('student_name','unknown').replace(' ','_')}.pdf", pdf_bytes)
+
+        buf.seek(0)
+        return Response(
+            content=buf.read(),
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename=invoices_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"},
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
 # ============================================================
 # EXPORT
 # ============================================================
