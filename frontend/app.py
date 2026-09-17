@@ -1404,6 +1404,7 @@ with st.sidebar:
             t("dashboard"), t("analyze"), t("database"), t("analytics"),
             t("reports"), t("attendance"), t("exams"), t("timetable"),
             t("assignments"), t("fees"), t("classes"), t("parent_links"),
+            "🏫 Class Assignments",
             t("profile"), t("filters"), t("live"), t("notifications"),
             t("scheduled_reports"), t("backup"), t("pdf_templates"),
             t("users"), t("audit"), t("settings"), t("ml"), t("bulk_import"),
@@ -1412,6 +1413,7 @@ with st.sidebar:
             "house", "pencil-square", "database", "bar-chart",
             "file-earmark-text", "calendar", "calendar-check", "calendar-week",
             "journal-check", "cash-coin", "building", "people",
+            "diagram-3",
             "person-circle", "funnel", "broadcast", "bell",
             "envelope-paper", "cloud-download", "file-pdf",
             "person-badge", "journal-text", "gear", "robot", "cloud-upload",
@@ -3758,6 +3760,122 @@ elif selected == t("import_export"):
                     st.download_button("💾 Save .xlsx", data=r.content,
                                        file_name="students.xlsx",
                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+
+
+# ============================================================
+# PAGE: CLASS ASSIGNMENTS (admin only)
+# ============================================================
+elif selected == "🏫 Class Assignments" and user_role == "admin":
+    st.markdown(
+        '<div class="main-header"><h1>🏫 Class Assignments</h1>'
+        '<p>Control which classes each teacher can access</p></div>',
+        unsafe_allow_html=True,
+    )
+
+    r = api_get("/auth/users")
+    data = handle_response(r, show_error=False) if r else None
+    users_list = data.get("users", []) if data else []
+
+    _cls_resp = api_get("/auth/classes/all")
+    _cls_data = handle_response(_cls_resp, show_error=False) if _cls_resp else None
+    _all_classes = _cls_data.get("classes", []) if _cls_data else []
+
+    teachers = [u for u in users_list if u.get("role") == "teacher"]
+
+    if not users_list:
+        st.error("Cannot load users. Please refresh.")
+    elif not teachers:
+        st.info("No teacher accounts exist yet. Register a teacher first (Register tab).")
+    elif not _all_classes:
+        st.warning("No classes exist yet. Create a student with a class name (e.g., CS-A) via the Analyze page.")
+    else:
+        c1, c2 = st.columns([3, 2])
+
+        with c1:
+            st.markdown("### 🎯 Assign Classes to a Teacher")
+
+            _t_opts = {
+                f"{u['username']} ({u.get('full_name') or u['email']})": u["id"]
+                for u in teachers
+            }
+            _sel_label = st.selectbox(
+                "Select a teacher",
+                options=list(_t_opts.keys()),
+                key="cls_page_teacher",
+            )
+            _sel_id = _t_opts[_sel_label]
+
+            _cur_resp = api_get(f"/auth/users/{_sel_id}/classes")
+            _cur_data = handle_response(_cur_resp, show_error=False) if _cur_resp else None
+            _current = _cur_data.get("classes", []) if _cur_data else []
+
+            st.markdown("**Available classes:**")
+            _chosen = st.multiselect(
+                "Classes",
+                options=_all_classes,
+                default=_current,
+                key="cls_page_multiselect",
+                label_visibility="collapsed",
+            )
+
+            _c1, _c2, _c3 = st.columns([2, 1, 2])
+            with _c1:
+                if st.button("💾 Save Assignments", type="primary", use_container_width=True):
+                    _save = api_post(
+                        f"/auth/users/{_sel_id}/classes",
+                        json={"class_names": _chosen},
+                    )
+                    if _save and _save.status_code == 200:
+                        st.success("Assignments saved.")
+                        st.balloons()
+                        import time as _t; _t.sleep(0.6)
+                        st.rerun()
+                    else:
+                        try:
+                            _err = _save.json().get("detail", "Failed")
+                        except Exception:
+                            _err = "Unknown error"
+                        st.error(f"Failed: {_err}")
+            with _c2:
+                if st.button("🔄 Reset", use_container_width=True):
+                    st.rerun()
+            with _c3:
+                if _chosen != _current:
+                    st.caption("Unsaved changes")
+                else:
+                    st.caption("Synced")
+
+        with c2:
+            st.markdown("### 📋 All Teacher Assignments")
+
+            _all_rows = []
+            for _t in teachers:
+                _r = api_get(f"/auth/users/{_t['id']}/classes")
+                _d = handle_response(_r, show_error=False) if _r else None
+                _cls = _d.get("classes", []) if _d else []
+                _all_rows.append({
+                    "Teacher": _t["username"],
+                    "Full Name": _t.get("full_name") or "—",
+                    "Assigned": ", ".join(_cls) if _cls else "(none)",
+                    "Count": len(_cls),
+                })
+
+            if _all_rows:
+                import pandas as _pd
+                st.dataframe(
+                    _pd.DataFrame(_all_rows),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        st.markdown("---")
+        st.info(
+            "Teachers see only students in their assigned classes. "
+            "A teacher with no assignments sees zero students. "
+            "Changes take effect on the teacher's next page load."
+        )
 
 
 # ============================================================
