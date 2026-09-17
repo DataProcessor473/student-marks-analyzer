@@ -7039,11 +7039,13 @@ os.makedirs(SUBMISSION_DIR, exist_ok=True)
 @app.post("/assignments/{assignment_id}/submit")
 async def submit_assignment(
     assignment_id: int,
-    file: UploadFile = File(None),
-    text_answer: str = "",
+    request: Request,
     user=Depends(require_role("student", "admin", "teacher")),
 ):
-    """Student submits an assignment (file and/or text)."""
+    """Student submits an assignment (file and/or text).
+
+    Manually parses multipart form (works with both file and text).
+    """
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -7082,20 +7084,46 @@ async def submit_assignment(
     if not student_id:
         raise HTTPException(400, "Your account is not linked to a student record")
 
-    # Handle file upload
+    # Manually parse form and query params
+    text_answer = ""
     file_url = None
-    if file is not None:
-        if file.content_type not in ["application/pdf", "image/jpeg", "image/jpg", "image/png"]:
-            raise HTTPException(400, "Only PDF, JPG, PNG files allowed")
-        content = await file.read()
-        if len(content) > 5 * 1024 * 1024:
-            raise HTTPException(400, "File too large (max 5 MB)")
-        ext = os.path.splitext(file.filename or "file.pdf")[1].lower() or ".pdf"
-        fname = "submission_" + str(assignment_id) + "_" + str(student_id) + "_" + str(int(datetime.now().timestamp())) + ext
-        fpath = os.path.join(SUBMISSION_DIR, fname)
-        with open(fpath, "wb") as f:
-            f.write(content)
-        file_url = "/uploads/submissions/" + fname
+
+    # Query params first
+    try:
+        text_answer = request.query_params.get("text_answer", "") or ""
+    except Exception:
+        pass
+
+    # Then form (which may contain both file and text_answer)
+    _content_type_header = request.headers.get("content-type", "")
+    if "multipart/form-data" in _content_type_header or "application/x-www-form-urlencoded" in _content_type_header:
+        try:
+            _form = await request.form()
+            # Text field
+            _form_text = _form.get("text_answer")
+            if _form_text:
+                text_answer = str(_form_text)
+            # File field
+            _uploaded = _form.get("file")
+            if _uploaded is not None and hasattr(_uploaded, "read"):
+                _ct = getattr(_uploaded, "content_type", "") or ""
+                _fn = getattr(_uploaded, "filename", "file.pdf") or "file.pdf"
+                if _ct and _ct not in ["application/pdf", "image/jpeg", "image/jpg", "image/png"]:
+                    raise HTTPException(400, "Only PDF, JPG, PNG files allowed (got: " + _ct + ")")
+                _content = await _uploaded.read()
+                if len(_content) > 5 * 1024 * 1024:
+                    raise HTTPException(400, "File too large (max 5 MB)")
+                _ext = os.path.splitext(_fn)[1].lower() or ".pdf"
+                _fname = "submission_" + str(assignment_id) + "_" + str(student_id) + "_" + str(int(datetime.now().timestamp())) + _ext
+                _fpath = os.path.join(SUBMISSION_DIR, _fname)
+                with open(_fpath, "wb") as _f:
+                    _f.write(_content)
+                file_url = "/uploads/submissions/" + _fname
+                print("[OK] Saved file: " + _fname + " (" + str(len(_content)) + " bytes)")
+        except HTTPException:
+            raise
+        except Exception as _e:
+            print("[WARN] Form parse error: " + str(_e))
 
     try:
         with get_db_connection() as conn:
