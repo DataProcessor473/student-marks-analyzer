@@ -1386,6 +1386,25 @@ def init_database():
 
 
 
+BUILTIN_ACHIEVEMENTS = [
+    {"code": "first_a_plus", "name": "First A+", "icon": "🥇",
+     "description": "Earned your first A+ grade", "rule_type": "auto"},
+    {"code": "perfect_attendance", "name": "Perfect Attendance", "icon": "🎯",
+     "description": "100% present in the last 30 days", "rule_type": "auto"},
+    {"code": "improvement_streak", "name": "Improvement Streak", "icon": "📈",
+     "description": "3 consecutive records with improving average", "rule_type": "auto"},
+    {"code": "top_of_class", "name": "Top of Class", "icon": "🏆",
+     "description": "Highest average in the class", "rule_type": "auto"},
+    {"code": "century", "name": "Century", "icon": "💯",
+     "description": "Total marks >= 100 in a single assessment", "rule_type": "auto"},
+    {"code": "consistency", "name": "Consistency", "icon": "🔥",
+     "description": "Low standard deviation (< 5) across subjects", "rule_type": "auto"},
+]
+
+
+
+
+
 def _seed_builtin_achievements():
     """Insert built-in achievements if they don't exist."""
     try:
@@ -4510,23 +4529,6 @@ def delete_behavior_note(
 # ============================================================
 # ACHIEVEMENT BADGES (Feature 6)
 # ============================================================
-BUILTIN_ACHIEVEMENTS = [
-    {"code": "first_a_plus", "name": "First A+", "icon": "🥇",
-     "description": "Earned your first A+ grade", "rule_type": "auto"},
-    {"code": "perfect_attendance", "name": "Perfect Attendance", "icon": "🎯",
-     "description": "100% present in the last 30 days", "rule_type": "auto"},
-    {"code": "improvement_streak", "name": "Improvement Streak", "icon": "📈",
-     "description": "3 consecutive records with improving average", "rule_type": "auto"},
-    {"code": "top_of_class", "name": "Top of Class", "icon": "🏆",
-     "description": "Highest average in the class", "rule_type": "auto"},
-    {"code": "century", "name": "Century", "icon": "💯",
-     "description": "Total marks >= 100 in a single assessment", "rule_type": "auto"},
-    {"code": "consistency", "name": "Consistency", "icon": "🔥",
-     "description": "Low standard deviation (< 5) across subjects", "rule_type": "auto"},
-]
-
-
-
 def _award_badge(student_id: int, code: str, awarded_by: Optional[int] = None):
     """Award a badge if not already earned. Returns True if newly awarded."""
     try:
