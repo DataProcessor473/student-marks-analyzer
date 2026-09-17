@@ -529,6 +529,40 @@ def apply_theme():
     }}
 
     /* Sidebar radio (custom nav) */
+    /* Sidebar radio nav — style like menu items */
+    section[data-testid="stSidebar"] div[role="radiogroup"] {{
+        gap: 0.15rem;
+        display: flex;
+        flex-direction: column;
+    }}
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label {{
+        padding: 0.5rem 0.75rem !important;
+        border-radius: 8px !important;
+        cursor: pointer;
+        margin: 0 !important;
+        border-left: 3px solid transparent;
+        transition: all 0.15s ease;
+    }}
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {{
+        background-color: rgba(99, 102, 241, 0.08);
+    }}
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {{
+        background-color: rgba(99, 102, 241, 0.14) !important;
+        border-left-color: #6366f1 !important;
+    }}
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label p {{
+        font-size: 0.85rem !important;
+        color: inherit !important;
+        margin: 0 !important;
+    }}
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label > div:first-child {{
+        display: none !important;
+    }}
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) p {{
+        color: #6366f1 !important;
+        font-weight: 600 !important;
+    }}
+
     section[data-testid="stSidebar"] div[role="radiogroup"] {{
         gap: 0.15rem;
     }}
@@ -1665,20 +1699,17 @@ with st.sidebar:
     if _candidate and _candidate in menu_options:
         _default_idx = menu_options.index(_candidate)
 
-    selected = option_menu(
-        menu_title=None, options=menu_options, icons=menu_icons,
-        menu_icon="cast", default_index=_default_idx,
-        styles={
-            "container": {"padding": "0!important", "background-color": "transparent"},
-            "icon": {"color": "#6366f1", "font-size": "0.95rem"},
-            "nav-link": {"font-size": "0.83rem", "text-align": "left",
-                         "margin": "0.1rem 0", "padding": "0.45rem 0.7rem",
-                         "border-radius": "8px", "color": "inherit",
-                         "--hover-color": "rgba(99,102,241,0.08)"},
-            "nav-link-selected": {"background-color": "rgba(99,102,241,0.14)",
-                                  "color": "#6366f1", "font-weight": "600",
-                                  "border-left": "3px solid #6366f1"},
-        }
+    # Native radio-based menu (no external dependency, no double-click bug)
+    _menu_key = "main_nav_radio_" + user_role
+    if _menu_key not in st.session_state:
+        st.session_state[_menu_key] = _default_idx
+
+    selected = st.radio(
+        "Navigation",
+        options=menu_options,
+        index=st.session_state.get(_menu_key, _default_idx),
+        key=_menu_key,
+        label_visibility="collapsed",
     )
 
     # Save current page for the session (no rerun triggered)
