@@ -708,6 +708,234 @@ def _q(query: str) -> str:
     return query
 
 
+def _create_postgres_tables():
+    """Create all required Postgres tables (idempotent)."""
+    if not USE_POSTGRES:
+        return
+    pg_tables = [
+        """CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(255) UNIQUE NOT NULL,
+            email VARCHAR(255) UNIQUE NOT NULL,
+            phone VARCHAR(50),
+            hashed_password TEXT NOT NULL,
+            full_name VARCHAR(255),
+            role VARCHAR(50) DEFAULT 'teacher',
+            is_active INTEGER DEFAULT 1,
+            email_verified INTEGER DEFAULT 0,
+            phone_verified INTEGER DEFAULT 0,
+            twofa_enabled INTEGER DEFAULT 0,
+            twofa_secret TEXT,
+            language VARCHAR(10) DEFAULT 'en',
+            theme VARCHAR(20) DEFAULT 'light',
+            failed_login_attempts INTEGER DEFAULT 0,
+            locked_until TIMESTAMP,
+            last_login TIMESTAMP,
+            must_change_password INTEGER DEFAULT 0,
+            password_changed_at TIMESTAMP,
+            token_version INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS otp_codes (
+            id SERIAL PRIMARY KEY, identifier VARCHAR(255) NOT NULL,
+            otp_code VARCHAR(10) NOT NULL, purpose VARCHAR(50) NOT NULL,
+            expires_at TIMESTAMP NOT NULL, used INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS students (
+            id SERIAL PRIMARY KEY, user_id INTEGER,
+            name VARCHAR(255) NOT NULL, marks TEXT NOT NULL,
+            subjects TEXT NOT NULL, grade VARCHAR(10) NOT NULL,
+            average REAL NOT NULL, total_marks REAL NOT NULL,
+            timestamp TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            semester VARCHAR(50), batch_year VARCHAR(20),
+            department VARCHAR(100), class_name VARCHAR(100),
+            photo_url TEXT, email VARCHAR(255), phone VARCHAR(50),
+            date_of_birth VARCHAR(20), address TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS attendance (
+            id SERIAL PRIMARY KEY, student_id INTEGER,
+            date TEXT NOT NULL, status VARCHAR(50) NOT NULL,
+            subject VARCHAR(100), notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS performance_trends (
+            id SERIAL PRIMARY KEY, student_id INTEGER,
+            semester VARCHAR(50), average REAL, grade VARCHAR(10),
+            total_marks REAL, timestamp TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS notifications (
+            id SERIAL PRIMARY KEY, student_id INTEGER, user_id INTEGER,
+            message TEXT, type VARCHAR(50),
+            is_read INTEGER DEFAULT 0, email_sent INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS notification_preferences (
+            id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL UNIQUE,
+            email_on_grade INTEGER DEFAULT 1,
+            email_on_attendance INTEGER DEFAULT 1,
+            email_on_fee INTEGER DEFAULT 1,
+            email_on_assignment INTEGER DEFAULT 1,
+            email_on_report INTEGER DEFAULT 0,
+            inapp_on_all INTEGER DEFAULT 1,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS parent_children (
+            id SERIAL PRIMARY KEY,
+            parent_user_id INTEGER NOT NULL, student_id INTEGER NOT NULL,
+            relationship VARCHAR(50) DEFAULT 'parent',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(parent_user_id, student_id)
+        )""",
+        """CREATE TABLE IF NOT EXISTS token_blacklist (
+            id SERIAL PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS login_attempts (
+            id SERIAL PRIMARY KEY, username VARCHAR(255),
+            ip_address VARCHAR(50), user_agent TEXT,
+            success INTEGER, reason TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS audit_log (
+            id SERIAL PRIMARY KEY, user_id INTEGER,
+            username VARCHAR(255), action VARCHAR(100) NOT NULL,
+            resource VARCHAR(100), details TEXT, ip_address VARCHAR(50),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS role_history (
+            id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL,
+            username VARCHAR(255) NOT NULL, old_role VARCHAR(50) NOT NULL,
+            new_role VARCHAR(50) NOT NULL, changed_by INTEGER,
+            changed_by_username VARCHAR(255),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS classes (
+            id SERIAL PRIMARY KEY, name VARCHAR(100) UNIQUE NOT NULL,
+            department VARCHAR(100), teacher_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS email_queue (
+            id SERIAL PRIMARY KEY, to_email VARCHAR(255) NOT NULL,
+            subject TEXT NOT NULL, html_body TEXT NOT NULL,
+            sent INTEGER DEFAULT 0, attempts INTEGER DEFAULT 0,
+            error TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS exams (
+            id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL,
+            class_name VARCHAR(100), subject VARCHAR(100),
+            exam_date TEXT NOT NULL, start_time TEXT, end_time TEXT,
+            total_marks INTEGER DEFAULT 100, room VARCHAR(100), notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS timetable (
+            id SERIAL PRIMARY KEY, class_name VARCHAR(100) NOT NULL,
+            day_of_week VARCHAR(20) NOT NULL, period INTEGER,
+            subject VARCHAR(100) NOT NULL, teacher_name VARCHAR(255),
+            room VARCHAR(100), start_time TEXT, end_time TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS assignments (
+            id SERIAL PRIMARY KEY, title VARCHAR(255) NOT NULL,
+            description TEXT, class_name VARCHAR(100), subject VARCHAR(100),
+            due_date TEXT NOT NULL, total_marks INTEGER DEFAULT 100,
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS assignment_submissions (
+            id SERIAL PRIMARY KEY, assignment_id INTEGER NOT NULL,
+            student_id INTEGER NOT NULL, submitted_at TEXT,
+            status VARCHAR(50) DEFAULT 'pending', marks_obtained REAL,
+            feedback TEXT, file_url TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(assignment_id, student_id)
+        )""",
+        """CREATE TABLE IF NOT EXISTS fee_structures (
+            id SERIAL PRIMARY KEY, class_name VARCHAR(100) NOT NULL,
+            fee_type VARCHAR(100) NOT NULL, amount REAL NOT NULL,
+            frequency VARCHAR(50) DEFAULT 'monthly',
+            academic_year VARCHAR(20),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS fee_payments (
+            id SERIAL PRIMARY KEY, student_id INTEGER NOT NULL,
+            fee_type VARCHAR(100) NOT NULL, amount REAL NOT NULL,
+            payment_date TEXT NOT NULL,
+            payment_method VARCHAR(50) DEFAULT 'cash',
+            transaction_id VARCHAR(100), status VARCHAR(50) DEFAULT 'paid',
+            due_date TEXT, notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS saved_filters (
+            id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL,
+            name VARCHAR(255) NOT NULL, entity VARCHAR(50) NOT NULL,
+            filter_json TEXT NOT NULL, is_shared INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS backup_logs (
+            id SERIAL PRIMARY KEY, filename VARCHAR(255) NOT NULL,
+            size_bytes INTEGER, backup_type VARCHAR(50) DEFAULT 'manual',
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS scheduled_reports (
+            id SERIAL PRIMARY KEY, report_type VARCHAR(50) NOT NULL,
+            recipients TEXT NOT NULL, schedule VARCHAR(50) NOT NULL,
+            last_sent TIMESTAMP, enabled INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS live_events (
+            id SERIAL PRIMARY KEY, user_id INTEGER,
+            event_type VARCHAR(100) NOT NULL, payload TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS sessions (
+            id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL, device_info TEXT,
+            ip_address VARCHAR(50),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            revoked INTEGER DEFAULT 0
+        )""",
+        """CREATE TABLE IF NOT EXISTS security_events (
+            id SERIAL PRIMARY KEY, user_id INTEGER, username VARCHAR(255),
+            event_type VARCHAR(100) NOT NULL, details TEXT,
+            ip_address VARCHAR(50), user_agent TEXT,
+            severity VARCHAR(20) DEFAULT 'info',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS password_history (
+            id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS recovery_codes (
+            id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL,
+            code_hash TEXT NOT NULL, used INTEGER DEFAULT 0,
+            used_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+    ]
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            for sql in pg_tables:
+                cursor.execute(sql)
+            conn.commit()
+            print("[OK] PostgreSQL tables ensured")
+    except Exception as e:
+        print(f"[ERROR] Failed to create Postgres tables: {e}")
+
+
+def _bootstrap_postgres():
+    """Call right after init_database() to ensure Postgres schema exists."""
+    if USE_POSTGRES:
+        _create_postgres_tables()
+
+
 def init_database():
     """Initialize DB. Skips on PostgreSQL (schema already migrated)."""
     if USE_POSTGRES:
@@ -1042,6 +1270,7 @@ def init_database():
 
 
 init_database()
+_bootstrap_postgres()
 
 
 # ============================================================
