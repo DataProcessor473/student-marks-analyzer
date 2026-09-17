@@ -1854,7 +1854,7 @@ elif selected == t("attendance") or selected == "📅 My Attendance":
     st.markdown(f'<div class="main-header"><h1>{t("attendance")}</h1></div>', unsafe_allow_html=True)
 
     if user_role in ["admin", "teacher"]:
-        tab1, tab2, tab3 = st.tabs(["📝 Single", "📋 Bulk", "📊 Overall"])
+        tab1, tab2, tab3, tab4 = st.tabs(["📝 Single", "📋 Bulk", "📊 Overall", "📈 Trends"])
 
         with tab1:
             r = api_get("/students", params={"limit": 500})
@@ -1910,6 +1910,130 @@ elif selected == t("attendance") or selected == "📅 My Attendance":
                 with c4: st.metric("Rate", f"{data['overall_rate']:.1f}%")
     else:
         st.info("Your attendance summary")
+
+        with tab4:
+            st.markdown("### 📈 Attendance Trends")
+            st.caption("Daily attendance rate over time")
+
+            c1, c2 = st.columns([1, 3])
+            with c1:
+                days_choice = st.selectbox(
+                    "Time range",
+                    options=[7, 30, 90, 180],
+                    index=1,
+                    format_func=lambda x: f"Last {x} days",
+                    key="att_trend_days",
+                )
+            with c2:
+                st.markdown("&nbsp;", unsafe_allow_html=True)
+
+            # Fetch trends
+            try:
+                trend_resp = api_get(f"/attendance/trends?days={days_choice}")
+                trend_data = handle_response(trend_resp, show_error=False) if trend_resp else None
+            except Exception as _e:
+                trend_data = None
+                st.error(f"Failed to load trends: {_e}")
+
+            if not trend_data or not trend_data.get("trends"):
+                st.info(
+                    "No attendance records found in this time range. "
+                    "Add attendance via the **📝 Single** or **📋 Bulk** tabs."
+                )
+            else:
+                trends = trend_data["trends"]
+                summary = trend_data.get("summary", {})
+
+                # Summary cards
+                m1, m2, m3 = st.columns(3)
+                with m1:
+                    avg = summary.get("avg_rate", 0)
+                    color = "#10b981" if avg >= 80 else "#f59e0b" if avg >= 60 else "#ef4444"
+                    st.markdown(
+                        f"""
+                        <div class="metric-card">
+                            <div class="metric-icon">📊</div>
+                            <div class="metric-value" style="color:{color};">{avg:.1f}%</div>
+                            <div class="metric-label">Average Rate</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                with m2:
+                    best = summary.get("best_day") or {}
+                    st.markdown(
+                        f"""
+                        <div class="metric-card">
+                            <div class="metric-icon">🏆</div>
+                            <div class="metric-value" style="color:#10b981;">{best.get('rate', 0):.1f}%</div>
+                            <div class="metric-label">Best Day ({best.get('date', '—')})</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                with m3:
+                    worst = summary.get("worst_day") or {}
+                    st.markdown(
+                        f"""
+                        <div class="metric-card">
+                            <div class="metric-icon">⚠️</div>
+                            <div class="metric-value" style="color:#ef4444;">{worst.get('rate', 0):.1f}%</div>
+                            <div class="metric-label">Worst Day ({worst.get('date', '—')})</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                st.markdown("---")
+
+                # Line chart
+                import plotly.graph_objects as _go
+                import pandas as _pd
+
+                tdf = _pd.DataFrame(trends)
+                tdf["date"] = _pd.to_datetime(tdf["date"])
+
+                colors = get_chart_colors()
+
+                fig = _go.Figure()
+                fig.add_trace(_go.Scatter(
+                    x=tdf["date"],
+                    y=tdf["rate"],
+                    mode="lines+markers",
+                    name="Attendance Rate",
+                    line=dict(color=colors["primary"], width=3),
+                    marker=dict(size=8, color=colors["primary"]),
+                    fill="tozeroy",
+                    fillcolor=f"rgba(99,102,241,0.15)",
+                ))
+                # 80% reference line
+                fig.add_hline(
+                    y=80,
+                    line=dict(color=colors["success"], width=1, dash="dash"),
+                    annotation_text="Target (80%)",
+                    annotation_position="top left",
+                )
+                fig.update_yaxes(range=[0, 105], title="Attendance Rate (%)")
+                fig.update_xaxes(title="Date")
+                fig.update_layout(
+                    height=400,
+                    showlegend=False,
+                    title=f"Attendance Rate (Last {days_choice} Days)",
+                )
+                st.plotly_chart(style_chart(fig), use_container_width=True)
+
+                # Data table
+                with st.expander("📋 View daily data"):
+                    display_df = tdf.copy()
+                    display_df["date"] = display_df["date"].dt.strftime("%Y-%m-%d")
+                    display_df["rate"] = display_df["rate"].apply(lambda x: f"{x:.1f}%")
+                    st.dataframe(
+                        display_df[["date", "present", "absent", "late", "excused", "total", "rate"]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+
 
 
 # ============================================================
