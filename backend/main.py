@@ -1382,6 +1382,12 @@ def init_database():
 init_database()
 _bootstrap_postgres()
 
+# Seed built-in achievement badges (Feature 6)
+try:
+    _seed_builtin_achievements()
+except Exception as _e:
+    print(f"[WARN] Achievement seeding failed: {_e}")
+
 
 # ============================================================
 # PYDANTIC MODELS
