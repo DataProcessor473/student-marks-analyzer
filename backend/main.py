@@ -972,6 +972,12 @@ def _bootstrap_postgres():
         return
     _create_postgres_tables()
 
+    # Seed built-in achievements (Feature 6)
+    try:
+        _seed_builtin_achievements()
+    except Exception as _e:
+        print(f"[WARN] Achievement seeding failed: {_e}")
+
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -1379,14 +1385,31 @@ def init_database():
         print("[OK] Database initialized (SQLite)")
 
 
+
+def _seed_builtin_achievements():
+    """Insert built-in achievements if they don't exist."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            for a in BUILTIN_ACHIEVEMENTS:
+                if USE_POSTGRES:
+                    cursor.execute(_q("""
+                        INSERT INTO achievements (code, name, description, icon, rule_type, rule_data)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (code) DO NOTHING
+                    """), (a["code"], a["name"], a["description"], a["icon"], a["rule_type"], None))
+                else:
+                    cursor.execute(_q("""
+                        INSERT OR IGNORE INTO achievements (code, name, description, icon, rule_type, rule_data)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """), (a["code"], a["name"], a["description"], a["icon"], a["rule_type"], None))
+            conn.commit()
+    except Exception as e:
+        print(f"[WARN] Could not seed achievements: {e}")
+
+
 init_database()
 _bootstrap_postgres()
-
-# Seed built-in achievement badges (Feature 6)
-try:
-    _seed_builtin_achievements()
-except Exception as _e:
-    print(f"[WARN] Achievement seeding failed: {_e}")
 
 
 # ============================================================
@@ -4502,27 +4525,6 @@ BUILTIN_ACHIEVEMENTS = [
      "description": "Low standard deviation (< 5) across subjects", "rule_type": "auto"},
 ]
 
-
-def _seed_builtin_achievements():
-    """Insert built-in achievements if they don't exist."""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            for a in BUILTIN_ACHIEVEMENTS:
-                if USE_POSTGRES:
-                    cursor.execute(_q("""
-                        INSERT INTO achievements (code, name, description, icon, rule_type, rule_data)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        ON CONFLICT (code) DO NOTHING
-                    """), (a["code"], a["name"], a["description"], a["icon"], a["rule_type"], None))
-                else:
-                    cursor.execute(_q("""
-                        INSERT OR IGNORE INTO achievements (code, name, description, icon, rule_type, rule_data)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """), (a["code"], a["name"], a["description"], a["icon"], a["rule_type"], None))
-            conn.commit()
-    except Exception as e:
-        print(f"[WARN] Could not seed achievements: {e}")
 
 
 def _award_badge(student_id: int, code: str, awarded_by: Optional[int] = None):
