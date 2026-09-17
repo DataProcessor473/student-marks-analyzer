@@ -6825,13 +6825,21 @@ def _ics_escape(s: str) -> str:
 
 
 def _ics_datetime(date_str: str, time_str: str = None) -> str:
-    """Format a date (+ optional time) as iCal DTSTART value."""
+    """Format a date (+ optional time) as iCal DTSTART value with HHMMSS."""
     try:
-        d = date_str.replace("-", "").strip()
+        d = (date_str or "").replace("-", "").strip()
+        if len(d) != 8:
+            from datetime import datetime as _dt
+            d = _dt.now().strftime("%Y%m%d")
         if time_str:
-            t = time_str.replace(":", "").strip()
+            t = (time_str or "").replace(":", "").strip()
+            # Force 6-digit HHMMSS
             if len(t) == 4:
                 t = t + "00"
+            elif len(t) == 5:
+                t = "0" + t
+            elif len(t) < 4:
+                t = "090000"
             return d + "T" + t
         return d + "T090000"
     except Exception:
@@ -6958,15 +6966,29 @@ def timetable_to_ics(class_name: str, user=Depends(require_user)):
     for i, e in enumerate(entries):
         day = e.get("day_of_week", "Monday")
         byday = day_map.get(day, "MO")
-        st = (e.get("start_time") or "09:00").replace(":", "")
+        st = (e.get("start_time") or "09:00").replace(":", "").strip()
         if len(st) == 4:
             st = st + "00"
-        et = (e.get("end_time") or "").replace(":", "")
+        elif len(st) == 5:
+            st = "0" + st
+        elif len(st) < 4:
+            st = "090000"
+        et = (e.get("end_time") or "").replace(":", "").strip()
         if not et:
-            et = _ics_add_minutes("20000101T" + st, 60)[9:]
-        else:
-            if len(et) == 4:
-                et = et + "00"
+            # Compute end from start + 60 minutes
+            from datetime import datetime as _ddt, timedelta as _dtd
+            try:
+                _s = _ddt.strptime(st, "%H%M%S")
+                _e = _s + _dtd(hours=1)
+                et = _e.strftime("%H%M%S")
+            except Exception:
+                et = "100000"
+        elif len(et) == 4:
+            et = et + "00"
+        elif len(et) == 5:
+            et = "0" + et
+        elif len(et) < 4:
+            et = "100000"
 
         event_date = monday
         offset = list(day_map.keys()).index(day) if day in day_map else 0
