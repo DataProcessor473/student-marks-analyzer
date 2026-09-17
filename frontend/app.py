@@ -1398,39 +1398,52 @@ with st.sidebar:
 
 
 
+
     # ============================================================
-    # QUICK SEARCH (Feature 21)
+    # QUICK SEARCH (Feature 21) — persistent across reruns
     # ============================================================
     if user_role in ("admin", "teacher"):
-        with st.expander("Quick Search", expanded=False):
+        with st.expander("🔍 Quick Search", expanded=False):
             _qs_query = st.text_input(
                 "Search students",
                 placeholder="Type a name...",
                 key="quick_search_q",
-                label_visibility="collapsed",
             )
-            if _qs_query and len(_qs_query.strip()) >= 2:
-                try:
-                    _qs_resp = api_get("/students", params={"limit": 500})
-                    _qs_data = handle_response(_qs_resp, show_error=False) if _qs_resp else None
-                    _qs_students = _qs_data.get("students", []) if _qs_data else []
-                    _qs_matches = [
-                        s for s in _qs_students
-                        if _qs_query.strip().lower() in s.get("name", "").lower()
-                    ][:6]
-                    if not _qs_matches:
-                        st.caption("No matches")
-                    else:
-                        for _m in _qs_matches:
-                            _label = _m["name"] + " - " + (_m.get("class_name") or "N/A")
-                            if st.button(_label, key="qs_" + str(_m["id"]), use_container_width=True):
-                                st.session_state["_qs_goto_student_id"] = _m["id"]
-                                st.session_state["_qs_goto_student_name"] = _m["name"]
-                                st.info("Student ID " + str(_m["id"]) + " saved. Go to Profile page to view.")
-                except Exception as _e:
-                    st.caption("Search error: " + str(_e))
 
-    st.markdown("---")
+            # Always perform search if there's a query in session state
+            _effective_query = st.session_state.get("quick_search_q", "").strip()
+
+            if _effective_query and len(_effective_query) >= 2:
+                _qs_resp = api_get("/students", params={"limit": 500})
+                _qs_data = handle_response(_qs_resp, show_error=False) if _qs_resp else None
+                _qs_students = _qs_data.get("students", []) if _qs_data else []
+                _qs_matches = [
+                    s for s in _qs_students
+                    if _effective_query.lower() in s.get("name", "").lower()
+                ][:6]
+
+                if not _qs_matches:
+                    st.caption("No matches for: " + _effective_query)
+                else:
+                    st.caption("Click a result:")
+                    for _m in _qs_matches:
+                        _cls = _m.get("class_name") or "—"
+                        _label = _m["name"] + "  ·  " + _cls
+                        if st.button(_label, key="qs_btn_" + str(_m["id"]), use_container_width=True):
+                            st.session_state["_qs_goto_student_id"] = _m["id"]
+                            st.session_state["_qs_goto_student_name"] = _m["name"]
+                            st.rerun()
+
+            # Show saved selection
+            _saved_id = st.session_state.get("_qs_goto_student_id")
+            _saved_name = st.session_state.get("_qs_goto_student_name")
+            if _saved_id:
+                st.caption("✅ Selected: " + str(_saved_name) + " (ID " + str(_saved_id) + ")")
+                if st.button("Clear selection", key="qs_clear"):
+                    st.session_state.pop("_qs_goto_student_id", None)
+                    st.session_state.pop("_qs_goto_student_name", None)
+                    st.rerun()
+
     st.markdown("---")
 
     # Build menu based on role
