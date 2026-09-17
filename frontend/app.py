@@ -826,6 +826,87 @@ def apply_theme():
 apply_theme()
 
 
+# ============================================================
+# CHART THEME HELPERS (theme-aware colors for Plotly)
+# ============================================================
+def get_chart_colors() -> dict:
+    """Return theme-aware colors for charts."""
+    is_dark = st.session_state.get("theme", "light") == "dark"
+    if is_dark:
+        return {
+            "bg": "#1a1d29",
+            "paper": "#1a1d29",
+            "text": "#e8eaf2",
+            "grid": "#2a2f42",
+            "zeroline": "#3a4055",
+            "primary": "#6366f1",
+            "accent": "#8b5cf6",
+            "success": "#10b981",
+            "warning": "#f59e0b",
+            "danger": "#ef4444",
+            "muted": "#9aa0b4",
+            "gradient_good": "#10b981",
+            "gradient_mid": "#f59e0b",
+            "gradient_bad": "#ef4444",
+            "grade_colors": {
+                "A+": "#10b981", "A": "#34d399", "B": "#84cc16",
+                "C": "#fbbf24", "D": "#f59e0b", "E": "#f97316", "F": "#ef4444",
+            },
+        }
+    return {
+        "bg": "#ffffff",
+        "paper": "#ffffff",
+        "text": "#0f172a",
+        "grid": "#e2e8f0",
+        "zeroline": "#cbd5e1",
+        "primary": "#4f46e5",
+        "accent": "#7c3aed",
+        "success": "#059669",
+        "warning": "#d97706",
+        "danger": "#dc2626",
+        "muted": "#64748b",
+        "gradient_good": "#10b981",
+        "gradient_mid": "#fbbf24",
+        "gradient_bad": "#ef4444",
+        "grade_colors": {
+            "A+": "#10b981", "A": "#34d399", "B": "#84cc16",
+            "C": "#fbbf24", "D": "#f59e0b", "E": "#f97316", "F": "#dc2626",
+        },
+    }
+
+
+def style_chart(fig):
+    """Apply theme-aware styling to a Plotly figure. Returns the figure."""
+    c = get_chart_colors()
+    fig.update_layout(
+        paper_bgcolor=c["paper"],
+        plot_bgcolor=c["bg"],
+        font=dict(color=c["text"], family="Inter, sans-serif", size=12),
+        title_font=dict(color=c["text"], size=14),
+        legend=dict(
+            bgcolor="rgba(0,0,0,0)",
+            bordercolor=c["grid"],
+            font=dict(color=c["text"]),
+        ),
+        margin=dict(l=20, r=20, t=40, b=20),
+    )
+    # Style axes if present
+    fig.update_xaxes(
+        gridcolor=c["grid"],
+        zerolinecolor=c["zeroline"],
+        tickfont=dict(color=c["text"]),
+        title_font=dict(color=c["text"]),
+    )
+    fig.update_yaxes(
+        gridcolor=c["grid"],
+        zerolinecolor=c["zeroline"],
+        tickfont=dict(color=c["text"]),
+        title_font=dict(color=c["text"]),
+    )
+    return fig
+
+
+
 def get_auth_headers():
     if st.session_state.token:
         return {"Authorization": f"Bearer {st.session_state.token}"}
