@@ -2640,6 +2640,64 @@ elif selected == t("reports"):
 # ============================================================
 # PAGE: ATTENDANCE
 # ============================================================
+elif selected == t("attendance") and user_role == "student":
+    st.markdown(f'<div class="main-header"><h1>My Attendance</h1><p>Your daily attendance record</p></div>', unsafe_allow_html=True)
+
+    _at_resp = api_get("/students", params={"limit": 10}, use_cache=True)
+    _at_data = handle_response(_at_resp, show_error=False) if _at_resp else None
+    _at_students = _at_data.get("students", []) if _at_data else []
+
+    if not _at_students:
+        st.warning("Your account is not linked to a student record yet.")
+    else:
+        _as = _at_students[0]
+        try:
+            _ar = api_get("/attendance/" + str(_as["id"]) + "/stats", use_cache=True)
+            _ad = handle_response(_ar, show_error=False) if _ar else None
+        except Exception:
+            _ad = None
+
+        if not _ad or _ad.get("total_days", 0) == 0:
+            st.info("No attendance records yet.")
+        else:
+            _rate = _ad.get("attendance_rate", 0)
+            _rate_color = "#10b981" if _rate >= 80 else "#f59e0b" if _rate >= 60 else "#ef4444"
+            st.markdown(
+                '<div class="metric-card" style="text-align:center;padding:2rem;">'
+                + '<div style="font-size:1rem;color:#6b7280;">Overall Attendance</div>'
+                + '<div style="font-size:4rem;font-weight:800;color:' + _rate_color + ';">' + str(round(_rate, 1)) + '%</div>'
+                + '<div style="font-size:1rem;color:#6b7280;">out of ' + str(_ad.get("total_days", 0)) + ' days</div>'
+                + '</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown("---")
+            _bc1, _bc2, _bc3, _bc4 = st.columns(4)
+            with _bc1: render_metric("Present", _ad.get("present", 0), "Present")
+            with _bc2: render_metric("Absent", _ad.get("absent", 0), "Absent")
+            with _bc3: render_metric("Late", _ad.get("late", 0), "Late")
+            with _bc4: render_metric("Excused", _ad.get("excused", 0), "Excused")
+
+            st.markdown("---")
+            st.markdown("### Attendance Heatmap")
+            try:
+                _hr = api_get("/attendance/" + str(_as["id"]) + "/heatmap", use_cache=True)
+                _hd = handle_response(_hr, show_error=False) if _hr else None
+            except Exception:
+                _hd = None
+            if _hd and _hd.get("heatmap"):
+                _hm_df = pd.DataFrame(_hd["heatmap"])
+                _hm_df["date"] = pd.to_datetime(_hm_df["date"])
+                _hfig = px.scatter(
+                    _hm_df, x="date", y=[1] * len(_hm_df),
+                    color="status",
+                    color_discrete_map={"present": "#10b981", "partial": "#f59e0b", "absent": "#ef4444"},
+                    size=[25] * len(_hm_df),
+                )
+                _hfig.update_yaxes(showticklabels=False, range=[0, 2])
+                _hfig.update_layout(height=180)
+                st.plotly_chart(style_chart(_hfig), use_container_width=True)
+
+
 elif selected == t("attendance") or selected == "📅 My Attendance":
     st.markdown(f'<div class="main-header"><h1>{t("attendance")}</h1></div>', unsafe_allow_html=True)
 
@@ -2989,6 +3047,76 @@ elif selected == t("timetable"):
 # ============================================================
 # PAGE: ASSIGNMENTS
 # ============================================================
+elif selected == t("assignments") and user_role == "student":
+    st.markdown(f'<div class="main-header"><h1>My Assignments</h1><p>Assignments for your class</p></div>', unsafe_allow_html=True)
+
+    _asn_resp = api_get("/students", params={"limit": 10}, use_cache=True)
+    _asn_data = handle_response(_asn_resp, show_error=False) if _asn_resp else None
+    _asn_students = _asn_data.get("students", []) if _asn_data else []
+
+    if not _asn_students:
+        st.warning("Your account is not linked to a student record yet.")
+    else:
+        _my_class = _asn_students[0].get("class_name")
+        try:
+            _ar = api_get("/assignments", use_cache=True)
+            _ad = handle_response(_ar, show_error=False) if _ar else None
+            _all_assignments = _ad.get("assignments", []) if _ad else []
+        except Exception:
+            _all_assignments = []
+
+        _my_assignments = [a for a in _all_assignments if a.get("class_name") == _my_class]
+
+        if not _my_assignments:
+            st.info("No assignments yet for your class.")
+        else:
+            from datetime import datetime as _dt
+            _today = _dt.now().date()
+            def _sort_key(a):
+                try:
+                    return _dt.fromisoformat(a["due_date"][:10]).date()
+                except Exception:
+                    return _today
+            _my_assignments.sort(key=_sort_key)
+
+            for a in _my_assignments:
+                try:
+                    _due = _dt.fromisoformat(a["due_date"][:10]).date()
+                    _days = (_due - _today).days
+                    if _days < 0:
+                        _urg = "Overdue"
+                        _col = "#6b7280"
+                    elif _days == 0:
+                        _urg = "Due today"
+                        _col = "#ef4444"
+                    elif _days <= 2:
+                        _urg = "Due in " + str(_days) + " day(s)"
+                        _col = "#f59e0b"
+                    elif _days <= 7:
+                        _urg = "Due in " + str(_days) + " days"
+                        _col = "#fbbf24"
+                    else:
+                        _urg = "Due in " + str(_days) + " days"
+                        _col = "#10b981"
+                except Exception:
+                    _urg = "-"
+                    _col = "#6b7280"
+                _html = (
+                    '<div style="border-left:4px solid ' + _col + ';padding:0.75rem 1rem;'
+                    + 'background:rgba(99,102,241,0.03);border-radius:8px;margin-bottom:0.5rem;">'
+                    + '<div style="display:flex;justify-content:space-between;">'
+                    + '<div><b>' + str(a.get("title") or "Untitled") + '</b></div>'
+                    + '<div style="color:' + _col + ';font-weight:600;font-size:0.85rem;">' + _urg + '</div>'
+                    + '</div>'
+                    + '<div style="color:#6b7280;font-size:0.85rem;margin-top:0.3rem;">'
+                    + 'Subject: ' + str(a.get("subject") or "-")
+                    + ' | Due: ' + str(a.get("due_date") or "-")
+                    + ' | Marks: ' + str(a.get("total_marks", 100))
+                    + '</div></div>'
+                )
+                st.markdown(_html, unsafe_allow_html=True)
+
+
 elif selected == t("assignments"):
     st.markdown(f'<div class="main-header"><h1>{t("assignments")}</h1><p>Track assignments and submissions</p></div>', unsafe_allow_html=True)
 
@@ -5033,26 +5161,61 @@ elif selected == t("my_results") and user_role == "student":
 # ============================================================
 # PAGE: TRENDS
 # ============================================================
-elif selected == t("trends") or selected == "📉 My Progress":
-    st.markdown(f'<div class="main-header"><h1>{t("trends")}</h1></div>', unsafe_allow_html=True)
-    r = api_get("/students", params={"limit": 100}, use_cache=True)
-    data = handle_response(r, show_error=False) if r else None
-    if data and data["count"] > 0:
-        opts = {f"{s['name']}": s["id"] for s in data["students"]}
-        sel = st.selectbox("Student", list(opts.keys()))
-        if st.button("📊 Analyze", type="primary"):
-            r = api_get(f"/trends/{opts[sel]}")
-            res = handle_response(r, show_error=False) if r else None
-            if res:
-                if "Not enough" in res.get("message", ""):
-                    st.warning(res["message"])
-                elif "error" in res:
-                    st.error(res["error"])
-                else:
-                    c1, c2, c3 = st.columns(3)
-                    with c1: st.metric("First", f"{res['first_average']:.2f}")
-                    with c2: st.metric("Current", f"{res['current_average']:.2f}")
-                    with c3: st.metric("Change", f"{res['improvement']:+.2f}")
+elif selected == t("my_progress") and user_role == "student":
+    st.markdown(f'<div class="main-header"><h1>My Progress</h1><p>Track your improvement over time</p></div>', unsafe_allow_html=True)
+
+    _mp_resp = api_get("/students", params={"limit": 10}, use_cache=True)
+    _mp_data = handle_response(_mp_resp, show_error=False) if _mp_resp else None
+    _mp_students = _mp_data.get("students", []) if _mp_data else []
+
+    if not _mp_students:
+        st.warning("Your account is not linked to a student record yet.")
+    else:
+        _mps = _mp_students[0]
+        try:
+            _tr = api_get("/trends/" + str(_mps["id"]), use_cache=True)
+            _td = handle_response(_tr, show_error=False) if _tr else None
+        except Exception:
+            _td = None
+
+        if not _td or not _td.get("trends") or len(_td.get("trends", [])) < 2:
+            st.info("Not enough data yet. You need at least 2 assessments to see progress.")
+            _mc1, _mc2, _mc3 = st.columns(3)
+            with _mc1: render_metric("Average", str(round(_mps["average"], 1)) + "%", "Current Average")
+            with _mc2: render_metric("Grade", _mps["grade"], "Grade")
+            with _mc3: render_metric("Subjects", len(_mps.get("subjects", [])), "Subjects")
+        else:
+            _trends = _td["trends"]
+            _avgs = [t["average"] for t in _trends]
+            _dates = [(t.get("timestamp") or t.get("created_at") or "")[:10] for t in _trends]
+
+            _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+            with _mc1: render_metric("Latest", str(round(_avgs[-1], 1)) + "%", "Latest Average")
+            with _mc2: render_metric("First", str(round(_avgs[0], 1)) + "%", "First Average")
+            _delta = _avgs[-1] - _avgs[0]
+            with _mc3: render_metric("Change", ("+" if _delta >= 0 else "") + str(round(_delta, 1)) + "%", "Improvement")
+            with _mc4: render_metric("Count", len(_trends), "Assessments")
+
+            st.markdown("---")
+            st.markdown("### Performance Over Time")
+            _pdf = pd.DataFrame({"Date": _dates, "Average": _avgs})
+            _lf = px.line(_pdf, x="Date", y="Average", markers=True)
+            _lf.update_traces(line=dict(color="#6366f1", width=3))
+            _lf.update_layout(height=350, showlegend=False)
+            _lf.update_yaxes(range=[0, 105], title="Average %")
+            st.plotly_chart(style_chart(_lf), use_container_width=True)
+
+            _subj_marks = list(zip(_mps.get("subjects", []), _mps.get("marks", [])))
+            if _subj_marks:
+                _sorted = sorted(_subj_marks, key=lambda x: x[1], reverse=True)
+                _c1, _c2 = st.columns(2)
+                with _c1:
+                    st.markdown("### Best Subject")
+                    st.success(_sorted[0][0] + " - " + str(round(_sorted[0][1])) + "%")
+                with _c2:
+                    st.markdown("### Needs Focus")
+                    st.warning(_sorted[-1][0] + " - " + str(round(_sorted[-1][1])) + "%")
+
 
 
 # ============================================================
