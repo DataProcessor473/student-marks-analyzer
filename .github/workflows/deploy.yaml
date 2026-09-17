@@ -1,0 +1,69 @@
+name: Deploy to Render
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Sanity Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Syntax check backend
+        run: |
+          cd backend
+          python -m py_compile main.py
+          echo "✅ main.py syntax OK"
+
+      - name: Syntax check frontend
+        run: |
+          cd frontend
+          python -m py_compile app.py
+          echo "✅ app.py syntax OK"
+
+  deploy:
+    name: Trigger Render Deployment
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render Deploy Hook
+        run: |
+          echo "Triggering Render deploy..."
+          HTTP_CODE=$(curl -s -o /tmp/render_response.txt -w "%{http_code}" \
+            -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}")
+          echo "HTTP Status: $HTTP_CODE"
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "✅ Deploy triggered successfully"
+          else
+            echo "❌ Deploy failed with status $HTTP_CODE"
+            cat /tmp/render_response.txt
+            exit 1
+          fi
+
+      - name: Wait for deploy to complete
+        run: |
+          echo "Waiting 30s for Render to deploy..."
+          sleep 30
+          
+          echo "Checking health..."
+          for i in 1 2 3 4 5 6; do
+            HEALTH=$(curl -s -o /dev/null -w "%{http_code}" \
+              "https://student-marks-analyzer-vju7.onrender.com/health")
+            echo "Attempt $i: HTTP $HEALTH"
+            if [ "$HEALTH" = "200" ]; then
+              echo "✅ Backend is healthy"
+              exit 0
+            fi
+            sleep 20
+          done
+          
+          echo "⚠️ Health check did not pass within timeout"
+          exit 1
