@@ -1120,7 +1120,7 @@ if not st.session_state.logged_in:
                                     "full_name": new_fullname or new_username,
                                     "role": reg_role,
                                 }
-                                r = requests.post(f"{API_URL}/auth/register", json=payload, timeout=15)
+                                r = requests.post(f"{API_URL}/auth/register", json=payload, timeout=90)
                                 if r.status_code == 200:
                                     d = r.json()
                                     st.session_state.pending_verify_email = d["email"]
@@ -1145,7 +1145,7 @@ if not st.session_state.logged_in:
                                 "identifier": st.session_state.pending_verify_email,
                                 "otp_code": email_otp.strip(),
                                 "purpose": "verification",
-                            }, timeout=15)
+                            }, timeout=90)
                             if r.status_code == 200:
                                 st.success("✅ Verified! You can log in now.")
                                 st.session_state.show_verify_otp = False
@@ -1167,7 +1167,7 @@ if not st.session_state.logged_in:
                             r = requests.post(f"{API_URL}/auth/send-otp",
                                             json={"identifier": reset_id.strip(),
                                                   "purpose": "reset_password"},
-                                            timeout=15)
+                                            timeout=90)
                             if r.status_code == 200:
                                 st.session_state.reset_identifier = reset_id.strip()
                                 st.session_state.reset_step = 2
@@ -1192,7 +1192,7 @@ if not st.session_state.logged_in:
                                     "identifier": st.session_state.reset_identifier,
                                     "otp_code": otp_code.strip(),
                                     "new_password": new_pw,
-                                }, timeout=15)
+                                }, timeout=90)
                                 if r.status_code == 200:
                                     st.success("Password reset! Log in now.")
                                     st.session_state.reset_step = 1
