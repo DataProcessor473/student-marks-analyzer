@@ -179,10 +179,14 @@ for k, v in defaults.items():
 # URL-PARAM SESSION PERSISTENCE (no external dependencies)
 # ============================================================
 def _restore_session_from_url():
-    """Restore session from URL token. Also validates existing tokens."""
+    """Restore session from URL token. Only validates token once every 5 minutes."""
     _url_token = st.query_params.get("t")
 
     if st.session_state.get("logged_in") and st.session_state.get("token"):
+        _last_check = st.session_state.get("_token_checked_at")
+        _now_ts = time.time()
+        if _last_check and (_now_ts - _last_check) < 300:
+            return True
         try:
             _r = requests.get(
                 API_URL + "/auth/me",
@@ -190,6 +194,7 @@ def _restore_session_from_url():
                 timeout=10,
             )
             if _r.status_code == 200:
+                st.session_state["_token_checked_at"] = _now_ts
                 return True
         except Exception:
             pass
@@ -1061,11 +1066,46 @@ def handle_response(resp, show_error=True):
     return None
 
 
-def api_get(endpoint, **kwargs):
+@st.cache_data(ttl=20, show_spinner=False)
+def _cached_get(endpoint: str, token: str, params_key: str = ""):
+    """Cached GET. TTL=20s."""
     try:
+        import json as _j
+        _params = _j.loads(params_key) if params_key else None
+        _h = {"Authorization": "Bearer " + token} if token else {}
+        _r = requests.get(f"{API_URL}{endpoint}", headers=_h, params=_params, timeout=15)
+        return _r.status_code, _r.text
+    except Exception as e:
+        return 0, str(e)
+
+
+class _FakeResponse:
+    def __init__(self, status, text):
+        self.status_code = status
+        self.text = text
+        self.headers = {}
+    def json(self):
+        import json as _j
+        return _j.loads(self.text)
+    @property
+    def content(self):
+        return self.text.encode("utf-8")
+
+
+def api_get(endpoint, use_cache=False, **kwargs):
+    try:
+        if use_cache and st.session_state.get("token"):
+            import json as _j
+            _p = kwargs.get("params")
+            _pk = _j.dumps(_p, sort_keys=True) if _p else ""
+            _status, _text = _cached_get(endpoint, st.session_state.token, _pk)
+            if _status == 0:
+                st.error("Network error: " + _text)
+                return None
+            return _FakeResponse(_status, _text)
         headers = kwargs.pop("headers", {})
         headers.update(get_auth_headers())
-        return requests.get(f"{API_URL}{endpoint}", headers=headers, timeout=90, **kwargs)
+        return requests.get(f"{API_URL}{endpoint}", headers=headers, timeout=30, **kwargs)
     except Exception as e:
         st.error(f"❌ Network error: {e}")
         return None
@@ -1530,7 +1570,7 @@ with st.sidebar:
             )
 
             if _qs_query and len(_qs_query.strip()) >= 2:
-                _qs_resp = api_get("/students", params={"limit": 500})
+                _qs_resp = api_get("/students", params={"limit": 500}, use_cache=True)
                 _qs_data = handle_response(_qs_resp, show_error=False) if _qs_resp else None
                 _qs_students = _qs_data.get("students", []) if _qs_data else []
                 _qs_matches = [
@@ -1688,7 +1728,7 @@ if selected == t("dashboard"):
         </div>
     """, unsafe_allow_html=True)
 
-    resp = api_get("/stats/overall")
+    resp = api_get("/stats/overall", use_cache=True)
     stats = handle_response(resp, show_error=False) if resp else None
 
     if stats and "total_students" in stats:
@@ -1722,7 +1762,7 @@ if selected == t("dashboard"):
     st.markdown("### 🏅 Recent Achievements")
 
     try:
-        _recent_resp = api_get("/students", params={"limit": 500})
+        _recent_resp = api_get("/students", params={"limit": 500}, use_cache=True)
         _recent_data = handle_response(_recent_resp, show_error=False) if _recent_resp else None
         _recent_students = _recent_data.get("students", []) if _recent_data else []
 
@@ -1782,7 +1822,7 @@ if selected == t("dashboard"):
             st.caption("Recent behavior notes across all your students.")
 
         # Fetch accessible students
-        _bs_resp = api_get("/students", params={"limit": 100})
+        _bs_resp = api_get("/students", params={"limit": 100}, use_cache=True)
         _bs_data = handle_response(_bs_resp, show_error=False) if _bs_resp else None
         _bs_students = _bs_data.get("students", []) if _bs_data else []
 
@@ -1980,7 +2020,7 @@ elif selected == t("analyze"):
 elif selected == t("database"):
     st.markdown(f'<div class="main-header"><h1>{t("database")}</h1><p>Manage students</p></div>', unsafe_allow_html=True)
 
-    resp = api_get("/students", params={"limit": 500})
+    resp = api_get("/students", params={"limit": 500}, use_cache=True)
     data = handle_response(resp, show_error=False) if resp else None
 
     if data and data["count"] > 0:
@@ -2134,7 +2174,7 @@ elif selected == t("bulk_import"):
 elif selected == t("analytics"):
     st.markdown(f'<div class="main-header"><h1>{t("analytics")}</h1></div>', unsafe_allow_html=True)
 
-    resp = api_get("/analytics/dashboard")
+    resp = api_get("/analytics/dashboard", use_cache=True)
     data = handle_response(resp, show_error=False) if resp else None
 
     if data and data.get("has_data"):
@@ -2170,7 +2210,7 @@ elif selected == t("analytics"):
         st.caption("Every student's marks across every subject. Red = struggling, green = strong.")
 
         # Fetch all students
-        _hm_resp = api_get("/students", params={"limit": 500})
+        _hm_resp = api_get("/students", params={"limit": 500}, use_cache=True)
         _hm_data = handle_response(_hm_resp, show_error=False) if _hm_resp else None
         _hm_students = _hm_data.get("students", []) if _hm_data else []
 
@@ -2406,7 +2446,7 @@ elif selected == t("attendance") or selected == "📅 My Attendance":
         tab1, tab2, tab3, tab4 = st.tabs(["📝 Single", "📋 Bulk", "📊 Overall", "📈 Trends"])
 
         with tab1:
-            r = api_get("/students", params={"limit": 500})
+            r = api_get("/students", params={"limit": 500}, use_cache=True)
             data = handle_response(r, show_error=False) if r else None
             students = data.get("students", []) if data else []
             if students:
@@ -2424,7 +2464,7 @@ elif selected == t("attendance") or selected == "📅 My Attendance":
                         st.success("Recorded!")
 
         with tab2:
-            r = api_get("/students", params={"limit": 500})
+            r = api_get("/students", params={"limit": 500}, use_cache=True)
             data = handle_response(r, show_error=False) if r else None
             students = data.get("students", []) if data else []
             if students:
@@ -2449,7 +2489,7 @@ elif selected == t("attendance") or selected == "📅 My Attendance":
                             st.balloons()
 
         with tab3:
-            r = api_get("/attendance/stats/overall")
+            r = api_get("/attendance/stats/overall", use_cache=True)
             data = handle_response(r, show_error=False) if r else None
             if data and data.get("total_records", 0) > 0:
                 c1, c2, c3, c4 = st.columns(4)
@@ -3036,7 +3076,7 @@ elif selected == t("fees"):
       with tab3:
         if user_role in ["admin", "teacher"]:
             st.markdown("### Record Payment")
-            r = api_get("/students", params={"limit": 500})
+            r = api_get("/students", params={"limit": 500}, use_cache=True)
             data = handle_response(r, show_error=False) if r else None
             students = data.get("students", []) if data else []
             if students:
@@ -3164,7 +3204,7 @@ elif selected == t("classes"):
     tab1, tab2, tab3 = st.tabs(["📊 Analytics", "➕ Create", "👥 Assign"])
 
     with tab1:
-        r = api_get("/classes/list-names")
+        r = api_get("/classes/list-names", use_cache=True)
         names_data = handle_response(r, show_error=False) if r else None
         class_names = names_data.get("names", []) if names_data else []
         if not class_names:
@@ -3222,10 +3262,10 @@ elif selected == t("classes"):
 
     with tab3:
         st.markdown("### Assign Students to Class")
-        r = api_get("/students", params={"limit": 500})
+        r = api_get("/students", params={"limit": 500}, use_cache=True)
         data = handle_response(r, show_error=False) if r else None
         students = data.get("students", []) if data else []
-        r2 = api_get("/classes/list-names")
+        r2 = api_get("/classes/list-names", use_cache=True)
         names_data = handle_response(r2, show_error=False) if r2 else None
         class_names = names_data.get("names", []) if names_data else []
 
@@ -3250,10 +3290,10 @@ elif selected == t("parent_links"):
     tab1, tab2 = st.tabs(["🔗 Link", "📋 All Links"])
 
     with tab1:
-        r = api_get("/auth/users")
+        r = api_get("/auth/users", use_cache=True)
         users_data = handle_response(r, show_error=False) if r else None
         parents = [u for u in users_data["users"] if u["role"] == "parent"] if users_data else []
-        r = api_get("/students", params={"limit": 500})
+        r = api_get("/students", params={"limit": 500}, use_cache=True)
         students_data = handle_response(r, show_error=False) if r else None
         students = students_data.get("students", []) if students_data else []
 
@@ -3307,7 +3347,7 @@ elif selected == t("parent_links"):
 elif selected == t("profile"):
     st.markdown(f'<div class="main-header"><h1>{t("profile")}</h1><p>Complete student profile with photo</p></div>', unsafe_allow_html=True)
 
-    r = api_get("/students", params={"limit": 500})
+    r = api_get("/students", params={"limit": 500}, use_cache=True)
     data = handle_response(r, show_error=False) if r else None
     students = data.get("students", []) if data else []
 
@@ -3718,7 +3758,7 @@ elif selected == t("profile"):
             # Admin: award badge tool
             if user_role == "admin":
                 with st.expander("➕ Award a badge"):
-                    _all_bdg_resp = api_get("/badges/all")
+                    _all_bdg_resp = api_get("/badges/all", use_cache=True)
                     _all_bdg_data = handle_response(_all_bdg_resp, show_error=False) if _all_bdg_resp else None
                     _all_badges = _all_bdg_data.get("badges", []) if _all_bdg_data else []
                     if _all_badges:
@@ -4207,7 +4247,7 @@ elif selected == t("pdf_templates"):
 
     st.markdown("---")
     st.markdown("### 📥 Generate Report Card")
-    r = api_get("/students", params={"limit": 500})
+    r = api_get("/students", params={"limit": 500}, use_cache=True)
     data = handle_response(r, show_error=False) if r else None
     students = data.get("students", []) if data else []
 
@@ -4264,7 +4304,7 @@ elif selected == t("ml"):
 
         with tab1:
             st.markdown("### Predict Student's Next Score")
-            r = api_get("/students", params={"limit": 500})
+            r = api_get("/students", params={"limit": 500}, use_cache=True)
             data = handle_response(r, show_error=False) if r else None
             students = data.get("students", []) if data else []
 
@@ -4476,7 +4516,7 @@ elif selected == t("settings"):
 # ============================================================
 elif selected == t("users") and user_role == "admin":
     st.markdown(f'<div class="main-header"><h1>{t("users")}</h1></div>', unsafe_allow_html=True)
-    r = api_get("/auth/users")
+    r = api_get("/auth/users", use_cache=True)
     data = handle_response(r) if r else None
     if data:
         users = data["users"]
@@ -4653,7 +4693,7 @@ elif selected == t("my_children") and user_role == "parent":
 elif selected == t("my_results") and user_role == "student":
     st.markdown(f'<div class="main-header"><h1>📊 My Results</h1><p>Your academic performance at a glance</p></div>', unsafe_allow_html=True)
 
-    _me_resp = api_get("/students", params={"limit": 10})
+    _me_resp = api_get("/students", params={"limit": 10}, use_cache=True)
     _me_data = handle_response(_me_resp, show_error=False) if _me_resp else None
     _my_students = _me_data.get("students", []) if _me_data else []
 
@@ -4794,7 +4834,7 @@ elif selected == t("my_results") and user_role == "student":
 # ============================================================
 elif selected == t("trends") or selected == "📉 My Progress":
     st.markdown(f'<div class="main-header"><h1>{t("trends")}</h1></div>', unsafe_allow_html=True)
-    r = api_get("/students", params={"limit": 100})
+    r = api_get("/students", params={"limit": 100}, use_cache=True)
     data = handle_response(r, show_error=False) if r else None
     if data and data["count"] > 0:
         opts = {f"{s['name']}": s["id"] for s in data["students"]}
@@ -4857,7 +4897,7 @@ elif selected == "🏫 Class Assignments" and user_role == "admin":
         unsafe_allow_html=True,
     )
 
-    r = api_get("/auth/users")
+    r = api_get("/auth/users", use_cache=True)
     data = handle_response(r, show_error=False) if r else None
     users_list = data.get("users", []) if data else []
 
@@ -4973,7 +5013,7 @@ elif selected == "⚙️ Grade Schemes" and user_role == "admin":
         unsafe_allow_html=True,
     )
 
-    _gs_resp = api_get("/grade-schemes")
+    _gs_resp = api_get("/grade-schemes", use_cache=True)
     _gs_data = handle_response(_gs_resp, show_error=False) if _gs_resp else None
     _schemes = _gs_data.get("schemes", []) if _gs_data else []
 
