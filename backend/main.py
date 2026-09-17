@@ -3573,16 +3573,75 @@ def delete_exam(exam_id: int, user=Depends(require_role("admin", "teacher"))):
 # TIMETABLE
 # ============================================================
 @app.post("/timetable/create")
-def create_timetable_entry(data: TimetableCreate, user=Depends(require_role("admin", "teacher"))):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(_q("""INSERT INTO timetable (class_name, day_of_week, period, subject,
-                                   teacher_name, room, start_time, end_time)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""),
-            (data.class_name, data.day_of_week, data.period, data.subject,
-             data.teacher_name, data.room, data.start_time, data.end_time))
-        conn.commit()
-    return {"message": "Timetable entry created"}
+def create_timetable_entry(data: TimetableCreate, force: bool = False,
+                           user=Depends(require_role("admin", "teacher"))):
+    """Create a timetable entry. Checks for teacher/room conflicts unless force=true."""
+    conflicts = []
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            # Check teacher conflict
+            if data.teacher_name:
+                cursor.execute(_q("""
+                    SELECT id, class_name, subject, room, start_time, end_time
+                    FROM timetable
+                    WHERE day_of_week = ?
+                      AND period = ?
+                      AND LOWER(teacher_name) = LOWER(?)
+                """), (data.day_of_week, data.period, data.teacher_name.strip()))
+                for r in cursor.fetchall():
+                    d = dict(r) if not isinstance(r, dict) else r
+                    conflicts.append({
+                        "type": "teacher",
+                        "message": "Teacher " + data.teacher_name + " is already booked for " + str(d.get("class_name") or "?") + " (Period " + str(data.period) + ")",
+                        "existing": d,
+                    })
+
+            # Check room conflict
+            if data.room:
+                cursor.execute(_q("""
+                    SELECT id, class_name, subject, teacher_name, start_time, end_time
+                    FROM timetable
+                    WHERE day_of_week = ?
+                      AND period = ?
+                      AND LOWER(room) = LOWER(?)
+                """), (data.day_of_week, data.period, data.room.strip()))
+                for r in cursor.fetchall():
+                    d = dict(r) if not isinstance(r, dict) else r
+                    conflicts.append({
+                        "type": "room",
+                        "message": "Room " + data.room + " is already booked for " + str(d.get("class_name") or "?") + " (Period " + str(data.period) + ")",
+                        "existing": d,
+                    })
+
+            if conflicts and not force:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Conflicts detected",
+                        "conflicts": conflicts,
+                        "hint": "Add ?force=true to override",
+                    },
+                )
+
+            cursor.execute(_q("""INSERT INTO timetable (class_name, day_of_week, period, subject,
+                                       teacher_name, room, start_time, end_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""),
+                (data.class_name, data.day_of_week, data.period, data.subject,
+                 data.teacher_name, data.room, data.start_time, data.end_time))
+            conn.commit()
+
+            return {
+                "message": "Timetable entry created",
+                "forced": bool(conflicts and force),
+                "conflicts_bypassed": len(conflicts) if force else 0,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, "Failed: " + str(e))
 
 
 @app.get("/timetable")
