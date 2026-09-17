@@ -3520,6 +3520,59 @@ elif selected == t("profile"):
                     else:
                         st.info("No badge definitions available.")
 
+
+
+            # ============================================================
+            # MONTHLY ATTENDANCE PDF (Feature 17)
+            # ============================================================
+            st.markdown("---")
+            st.markdown("### 📄 Monthly Attendance Report")
+            st.caption("Download a printable attendance report for any month.")
+
+            _pdf_c1, _pdf_c2, _pdf_c3 = st.columns([1, 1, 2])
+            from datetime import datetime as _pdf_dt
+            _pdf_now = _pdf_dt.now()
+
+            with _pdf_c1:
+                _pdf_month = st.selectbox(
+                    "Month",
+                    options=list(range(1, 13)),
+                    index=_pdf_now.month - 1,
+                    format_func=lambda m: ["", "Jan","Feb","Mar","Apr","May","Jun",
+                                           "Jul","Aug","Sep","Oct","Nov","Dec"][m],
+                    key="pdf_month_sel",
+                )
+            with _pdf_c2:
+                _pdf_year = st.number_input(
+                    "Year",
+                    min_value=2000, max_value=2100,
+                    value=_pdf_now.year,
+                    step=1,
+                    key="pdf_year_sel",
+                )
+            with _pdf_c3:
+                st.markdown("&nbsp;", unsafe_allow_html=True)
+                if st.button("📄 Generate Report", type="primary",
+                             use_container_width=True, key="pdf_gen_btn"):
+                    _pdf_resp = api_get(
+                        "/attendance/" + str(sid) + "/monthly-report?year="
+                        + str(int(_pdf_year)) + "&month=" + str(int(_pdf_month))
+                    )
+                    if _pdf_resp and _pdf_resp.status_code == 200:
+                        st.download_button(
+                            "💾 Download PDF",
+                            data=_pdf_resp.content,
+                            file_name="attendance_" + str(sid) + "_"
+                                      + str(int(_pdf_year)) + "_"
+                                      + str(int(_pdf_month)).zfill(2) + ".pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                            key="pdf_dl_btn",
+                        )
+                    else:
+                        st.error("Failed to generate report")
+
+
             # Parents
             if prof.get("parents"):
                 st.markdown("### 👨‍👩‍👧 Linked Parents")
