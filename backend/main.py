@@ -3337,7 +3337,7 @@ def list_auto_backups(user=Depends(require_admin)):
 # FEATURE 3: SCHEDULED REPORTS
 # ============================================================
 @app.post("/reports/schedule")
-def (data: ScheduledReportCreate, user=Depends(require_admin)):
+def create_scheduled_report(data: ScheduledReportCreate, user=Depends(require_admin)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
 
