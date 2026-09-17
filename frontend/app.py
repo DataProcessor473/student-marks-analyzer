@@ -1761,205 +1761,357 @@ with st.sidebar:
 # PAGE: DASHBOARD
 # ============================================================
 if selected == t("dashboard"):
-    st.markdown(f"""
-        <div class="main-header">
-            <h1>🏠 {t('welcome')}, {user_name}!</h1>
-            <p>Your personalized dashboard</p>
-        </div>
-    """, unsafe_allow_html=True)
+    # ── STUDENT view ──
+    if user_role == "student":
+        _me_resp = api_get("/students", params={"limit": 10}, use_cache=True)
+        _me_data = handle_response(_me_resp, show_error=False) if _me_resp else None
+        _my = _me_data.get("students", []) if _me_data else []
 
-    resp = api_get("/stats/overall", use_cache=True)
-    stats = handle_response(resp, show_error=False) if resp else None
-
-    if stats and "total_students" in stats:
-        c1, c2, c3, c4 = st.columns(4)
-        with c1: render_metric("👥", stats["total_students"], "Total Students")
-        with c2: render_metric("📈", f"{stats['average_of_averages']:.1f}", "Average Score")
-        with c3: render_metric("✅", f"{stats['pass_rate']:.0f}%", "Pass Rate")
-        with c4: render_metric("🏆", f"{stats['distinction_rate']:.0f}%", "Distinction")
-
-        st.markdown("---")
-        c1, c2 = st.columns(2)
-        with c1:
-            if stats.get("grade_distribution"):
-                st.markdown("### 📊 Grade Distribution")
-                gdf = pd.DataFrame({"Grade": list(stats["grade_distribution"].keys()),
-                                    "Count": list(stats["grade_distribution"].values())})
-                st.plotly_chart(style_chart(px.pie(gdf, values="Count", names="Grade", hole=0.4)),
-                              use_container_width=True)
-        with c2:
-            if stats.get("top_performers"):
-                st.markdown("### 🏆 Top Performers")
-                for i, s in enumerate(stats["top_performers"][:5], 1):
-                    medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "  "
-                    st.markdown(f"{medal} **{s['name']}** — {s['average']:.1f}% ({s['grade']})")
-
-
-    # ============================================================
-    # RECENT ACHIEVEMENTS (Feature 6)
-    # ============================================================
-    st.markdown("---")
-    st.markdown("### 🏅 Recent Achievements")
-
-    try:
-        _recent_resp = api_get("/students", params={"limit": 500}, use_cache=True)
-        _recent_data = handle_response(_recent_resp, show_error=False) if _recent_resp else None
-        _recent_students = _recent_data.get("students", []) if _recent_data else []
-
-        _all_recent = []
-        for _s in _recent_students[:20]:
-            _br = api_get(f"/students/{_s['id']}/badges")
-            _bd = handle_response(_br, show_error=False) if _br else None
-            for _b in (_bd.get("badges", []) if _bd else []):
-                _b["student_name"] = _s["name"]
-                _all_recent.append(_b)
-
-        _all_recent.sort(key=lambda x: x.get("awarded_at", ""), reverse=True)
-        _top5 = _all_recent[:5]
-
-        if not _top5:
-            st.info("No achievements awarded yet.")
+        if not _my:
+            st.markdown(
+                '<div class="main-header"><h1>🏠 Welcome, ' + user_name + '!</h1>'
+                '<p>Your account is not yet linked to a student record.</p></div>',
+                unsafe_allow_html=True,
+            )
+            st.info("Contact your school admin to link your account.")
         else:
-            for _r in _top5:
-                st.markdown(
-                    f"""
-                    <div style="display:flex;align-items:center;gap:1rem;
-                                background:rgba(99,102,241,0.08);
-                                border-left:4px solid #6366f1;
-                                padding:0.75rem 1rem;border-radius:8px;margin:0.4rem 0;">
-                        <div style="font-size:1.8rem;">{_r.get('icon','🏅')}</div>
-                        <div>
-                            <b>{_r.get('name','')}</b>
-                            <span style="color:#6b7280;font-size:0.85rem;">
-                                — awarded to {_r.get('student_name','')}
-                            </span>
-                            <div style="font-size:0.75rem;color:#9ca3af;">
-                                {_r.get('awarded_at','')[:16]}
-                            </div>
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-    except Exception as _e:
-        st.caption(f"Could not load recent achievements: {_e}")
+            _s = _my[0]
+            st.markdown(
+                '<div class="main-header"><h1>🏠 Welcome back, ' + _s["name"] + '!</h1>'
+                '<p>' + str(_s.get("class_name") or "") + ' · ' + str(_s.get("department") or "") + '</p></div>',
+                unsafe_allow_html=True,
+            )
 
-    else:
-        st.info(f"👋 {t('welcome')}! Get started by adding students.")
+            # Compute attendance rate
+            _att_rate = 0
+            try:
+                _ar = api_get("/attendance/" + str(_s["id"]) + "/stats", use_cache=True)
+                _ad = handle_response(_ar, show_error=False) if _ar else None
+                if _ad:
+                    _att_rate = _ad.get("attendance_rate", 0)
+            except Exception:
+                pass
 
-
-
-    # ============================================================
-    # BEHAVIOR SUMMARY (Feature 9)
-    # ============================================================
-    if user_role in ("parent", "admin", "teacher"):
-        st.markdown("---")
-        st.markdown("### 📝 Behavior Summary")
-
-        if user_role == "parent":
-            st.caption("Recent notes about your children (visible notes only).")
-        else:
-            st.caption("Recent behavior notes across all your students.")
-
-        # Fetch accessible students
-        _bs_resp = api_get("/students", params={"limit": 100}, use_cache=True)
-        _bs_data = handle_response(_bs_resp, show_error=False) if _bs_resp else None
-        _bs_students = _bs_data.get("students", []) if _bs_data else []
-
-        if not _bs_students:
-            st.info("No students to summarize.")
-        else:
-            # Aggregate notes across all accessible students (limit first 20)
-            _bs_all = []
-            for _bs_s in _bs_students[:20]:
-                try:
-                    _bs_nr = api_get("/students/" + str(_bs_s["id"]) + "/notes")
-                    _bs_nd = handle_response(_bs_nr, show_error=False) if _bs_nr else None
-                    for _n in (_bs_nd.get("notes", []) if _bs_nd else []):
-                        _n["_student_name"] = _bs_s["name"]
-                        _bs_all.append(_n)
-                except Exception:
-                    pass
-
-            # Sort by date
-            _bs_all.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-
-            # Counts
-            _bs_pos = len([n for n in _bs_all if n.get("note_type") == "positive"])
-            _bs_con = len([n for n in _bs_all if n.get("note_type") == "concern"])
-            _bs_inc = len([n for n in _bs_all if n.get("note_type") == "incident"])
-            _bs_obs = len([n for n in _bs_all if n.get("note_type") == "observation"])
+            # Badge count
+            _badge_count = 0
+            try:
+                _br = api_get("/students/" + str(_s["id"]) + "/badges", use_cache=True)
+                _bd = handle_response(_br, show_error=False) if _br else None
+                if _bd:
+                    _badge_count = _bd.get("count", 0)
+            except Exception:
+                pass
 
             # Metric cards
-            _bs_c1, _bs_c2, _bs_c3, _bs_c4 = st.columns(4)
-            with _bs_c1:
-                st.markdown(
-                    '<div class="metric-card">'
-                    '<div class="metric-icon">🟢</div>'
-                    '<div class="metric-value" style="color:#10b981;">' + str(_bs_pos) + '</div>'
-                    '<div class="metric-label">Positive</div></div>',
-                    unsafe_allow_html=True,
-                )
-            with _bs_c2:
-                st.markdown(
-                    '<div class="metric-card">'
-                    '<div class="metric-icon">🟠</div>'
-                    '<div class="metric-value" style="color:#f59e0b;">' + str(_bs_con) + '</div>'
-                    '<div class="metric-label">Concerns</div></div>',
-                    unsafe_allow_html=True,
-                )
-            with _bs_c3:
-                st.markdown(
-                    '<div class="metric-card">'
-                    '<div class="metric-icon">🔴</div>'
-                    '<div class="metric-value" style="color:#ef4444;">' + str(_bs_inc) + '</div>'
-                    '<div class="metric-label">Incidents</div></div>',
-                    unsafe_allow_html=True,
-                )
-            with _bs_c4:
-                st.markdown(
-                    '<div class="metric-card">'
-                    '<div class="metric-icon">🔵</div>'
-                    '<div class="metric-value" style="color:#3b82f6;">' + str(_bs_obs) + '</div>'
-                    '<div class="metric-label">Observations</div></div>',
-                    unsafe_allow_html=True,
-                )
+            _c1, _c2, _c3, _c4 = st.columns(4)
+            with _c1: render_metric("📊", str(round(_s["average"], 1)) + "%", "My Average")
+            with _c2: render_metric("🏆", _s["grade"], "My Grade")
+            with _c3: render_metric("📅", str(round(_att_rate, 1)) + "%", "My Attendance")
+            with _c4: render_metric("🏅", _badge_count, "My Badges")
 
-            # Recent notes
-            if _bs_all:
-                st.markdown("#### Recent Notes")
-                _bs_recent = _bs_all[:5]
-                _bs_icons = {
-                    "positive": ("🟢", "#10b981"),
-                    "concern": ("🟠", "#f59e0b"),
-                    "incident": ("🔴", "#ef4444"),
-                    "observation": ("🔵", "#3b82f6"),
-                }
-                for _n in _bs_recent:
-                    _nt = _n.get("note_type", "observation")
-                    _ic, _col = _bs_icons.get(_nt, ("⚪", "#6b7280"))
-                    _author = _n.get("author_name") or "Staff"
-                    _date = (_n.get("created_at") or "")[:10]
-                    _content = (_n.get("content") or "")[:120]
-                    if len(_n.get("content") or "") > 120:
-                        _content += "..."
-                    _student = _n.get("_student_name", "")
+            # Subject chart
+            if _s.get("subjects") and _s.get("marks"):
+                st.markdown("---")
+                st.markdown("### 📚 My Subject Performance")
+                _sdf = pd.DataFrame({"Subject": _s["subjects"], "Marks": _s["marks"]})
+                _sf = px.bar(_sdf, x="Subject", y="Marks", color="Marks",
+                             color_continuous_scale="RdYlGn", text="Marks")
+                _sf.update_traces(texttemplate="%{text:.0f}", textposition="outside")
+                _sf.update_layout(yaxis_range=[0, 105], showlegend=False, height=350)
+                st.plotly_chart(style_chart(_sf), use_container_width=True)
 
+            # Notes from teachers
+            st.markdown("---")
+            st.markdown("### 📝 Notes from Teachers")
+            try:
+                _nr = api_get("/students/" + str(_s["id"]) + "/notes", use_cache=True)
+                _nd = handle_response(_nr, show_error=False) if _nr else None
+                _notes = _nd.get("notes", []) if _nd else []
+            except Exception:
+                _notes = []
+
+            if not _notes:
+                st.info("No notes from teachers yet.")
+            else:
+                for _n in _notes[:3]:
+                    _ic = {"positive": "🟢", "concern": "🟠", "incident": "🔴", "observation": "🔵"}.get(_n.get("note_type"), "⚪")
                     st.markdown(
-                        '<div style="border-left:4px solid ' + _col + '; '
-                        'background:' + _col + '0F; padding:0.6rem 1rem; '
-                        'border-radius:8px; margin-bottom:0.5rem;">'
-                        '<div style="display:flex;justify-content:space-between;">'
-                        '<div><b style="color:' + _col + ';">' + _ic + ' ' + _nt.title() + '</b>'
-                        ' <span style="color:#6b7280;font-size:0.85rem;">— ' + _student + ' · ' + _author + '</span></div>'
-                        '<small style="color:#9ca3af;">' + _date + '</small>'
-                        '</div>'
-                        '<div style="margin-top:0.35rem;color:inherit;font-size:0.9rem;">' + _content + '</div>'
+                        '<div style="border-left:3px solid #6366f1;padding:0.5rem 1rem;'
+                        'background:rgba(99,102,241,0.06);border-radius:8px;margin:0.4rem 0;">'
+                        + _ic + ' <b>' + (_n.get("note_type") or "").title() + '</b> '
+                        '<span style="color:#6b7280;font-size:0.85rem;">— '
+                        + (_n.get("author_name") or "Staff") + ' · ' + (_n.get("created_at") or "")[:10]
+                        + '</span>'
+                        '<div style="margin-top:0.3rem;">' + (_n.get("content") or "") + '</div>'
                         '</div>',
                         unsafe_allow_html=True,
                     )
+
+            # Upcoming assignments
+            st.markdown("---")
+            st.markdown("### 📝 My Upcoming Assignments")
+            try:
+                _asr = api_get("/assignments", use_cache=True)
+                _asd = handle_response(_asr, show_error=False) if _asr else None
+                _assignments = _asd.get("assignments", []) if _asd else []
+            except Exception:
+                _assignments = []
+
+            # Filter to my class and next 14 days
+            from datetime import datetime as _dt, timedelta as _td
+            _today = _dt.now().date()
+            _in14 = _today + _td(days=14)
+            _mine = []
+            for _a in _assignments:
+                if _a.get("class_name") != _s.get("class_name"):
+                    continue
+                try:
+                    _d = _dt.fromisoformat(_a["due_date"][:10]).date()
+                    if _today <= _d <= _in14:
+                        _a["_due_date"] = _d
+                        _mine.append(_a)
+                except Exception:
+                    continue
+
+            if not _mine:
+                st.info("No upcoming assignments in the next 14 days.")
             else:
-                st.info("No behavior notes yet.")
+                for _a in sorted(_mine, key=lambda x: x["_due_date"]):
+                    _days = (_a["_due_date"] - _today).days
+                    _urgency = "🔴" if _days <= 2 else "🟠" if _days <= 7 else "🟢"
+                    _label = "Due in " + str(_days) + " day(s)" if _days > 0 else "Due today"
+                    st.markdown(
+                        '<div style="border:1px solid #e2e8f0;border-radius:8px;padding:0.7rem 1rem;'
+                        'margin-bottom:0.4rem;background:white;">'
+                        + _urgency + ' <b>' + (_a.get("title") or "Assignment") + '</b> '
+                        '<span style="color:#6b7280;font-size:0.85rem;">— '
+                        + (_a.get("subject") or "") + ' · ' + _label + '</span>'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+
+            # Fee status
+            st.markdown("---")
+            st.markdown("### 💰 My Fee Status")
+            try:
+                _fr = api_get("/fees/payments", use_cache=True)
+                _fd = handle_response(_fr, show_error=False) if _fr else None
+                _payments = _fd.get("payments", []) if _fd else []
+                _summary = _fd.get("summary", {}) if _fd else {}
+            except Exception:
+                _payments = []
+                _summary = {}
+
+            _fc1, _fc2 = st.columns(2)
+            with _fc1:
+                st.metric("Paid", "₹" + str(int(_summary.get("total_paid", 0))) if _summary else "₹0")
+            with _fc2:
+                _pending_amt = _summary.get("total_pending", 0) if _summary else 0
+                st.metric("Pending", "₹" + str(int(_pending_amt)))
+            if _pending_amt > 0:
+                st.warning("You have pending fees. Please contact your school admin.")
+    else:
+        # ── ADMIN / TEACHER / PARENT view (existing) ──
+
+            st.markdown(f"""
+                <div class="main-header">
+                    <h1>🏠 {t('welcome')}, {user_name}!</h1>
+                    <p>Your personalized dashboard</p>
+                </div>
+            """, unsafe_allow_html=True)
+
+            resp = api_get("/stats/overall", use_cache=True)
+            stats = handle_response(resp, show_error=False) if resp else None
+
+            if stats and "total_students" in stats:
+                c1, c2, c3, c4 = st.columns(4)
+                with c1: render_metric("👥", stats["total_students"], "Total Students")
+                with c2: render_metric("📈", f"{stats['average_of_averages']:.1f}", "Average Score")
+                with c3: render_metric("✅", f"{stats['pass_rate']:.0f}%", "Pass Rate")
+                with c4: render_metric("🏆", f"{stats['distinction_rate']:.0f}%", "Distinction")
+
+                st.markdown("---")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if stats.get("grade_distribution"):
+                        st.markdown("### 📊 Grade Distribution")
+                        gdf = pd.DataFrame({"Grade": list(stats["grade_distribution"].keys()),
+                                            "Count": list(stats["grade_distribution"].values())})
+                        st.plotly_chart(style_chart(px.pie(gdf, values="Count", names="Grade", hole=0.4)),
+                                      use_container_width=True)
+                with c2:
+                    if stats.get("top_performers"):
+                        st.markdown("### 🏆 Top Performers")
+                        for i, s in enumerate(stats["top_performers"][:5], 1):
+                            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "  "
+                            st.markdown(f"{medal} **{s['name']}** — {s['average']:.1f}% ({s['grade']})")
+
+
+            # ============================================================
+            # RECENT ACHIEVEMENTS (Feature 6)
+            # ============================================================
+            st.markdown("---")
+            st.markdown("### 🏅 Recent Achievements")
+
+            try:
+                _recent_resp = api_get("/students", params={"limit": 500}, use_cache=True)
+                _recent_data = handle_response(_recent_resp, show_error=False) if _recent_resp else None
+                _recent_students = _recent_data.get("students", []) if _recent_data else []
+
+                _all_recent = []
+                for _s in _recent_students[:20]:
+                    _br = api_get(f"/students/{_s['id']}/badges")
+                    _bd = handle_response(_br, show_error=False) if _br else None
+                    for _b in (_bd.get("badges", []) if _bd else []):
+                        _b["student_name"] = _s["name"]
+                        _all_recent.append(_b)
+
+                _all_recent.sort(key=lambda x: x.get("awarded_at", ""), reverse=True)
+                _top5 = _all_recent[:5]
+
+                if not _top5:
+                    st.info("No achievements awarded yet.")
+                else:
+                    for _r in _top5:
+                        st.markdown(
+                            f"""
+                            <div style="display:flex;align-items:center;gap:1rem;
+                                        background:rgba(99,102,241,0.08);
+                                        border-left:4px solid #6366f1;
+                                        padding:0.75rem 1rem;border-radius:8px;margin:0.4rem 0;">
+                                <div style="font-size:1.8rem;">{_r.get('icon','🏅')}</div>
+                                <div>
+                                    <b>{_r.get('name','')}</b>
+                                    <span style="color:#6b7280;font-size:0.85rem;">
+                                        — awarded to {_r.get('student_name','')}
+                                    </span>
+                                    <div style="font-size:0.75rem;color:#9ca3af;">
+                                        {_r.get('awarded_at','')[:16]}
+                                    </div>
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+            except Exception as _e:
+                st.caption(f"Could not load recent achievements: {_e}")
+
+            else:
+                st.info(f"👋 {t('welcome')}! Get started by adding students.")
+
+
+
+            # ============================================================
+            # BEHAVIOR SUMMARY (Feature 9)
+            # ============================================================
+            if user_role in ("parent", "admin", "teacher"):
+                st.markdown("---")
+                st.markdown("### 📝 Behavior Summary")
+
+                if user_role == "parent":
+                    st.caption("Recent notes about your children (visible notes only).")
+                else:
+                    st.caption("Recent behavior notes across all your students.")
+
+                # Fetch accessible students
+                _bs_resp = api_get("/students", params={"limit": 100}, use_cache=True)
+                _bs_data = handle_response(_bs_resp, show_error=False) if _bs_resp else None
+                _bs_students = _bs_data.get("students", []) if _bs_data else []
+
+                if not _bs_students:
+                    st.info("No students to summarize.")
+                else:
+                    # Aggregate notes across all accessible students (limit first 20)
+                    _bs_all = []
+                    for _bs_s in _bs_students[:20]:
+                        try:
+                            _bs_nr = api_get("/students/" + str(_bs_s["id"]) + "/notes")
+                            _bs_nd = handle_response(_bs_nr, show_error=False) if _bs_nr else None
+                            for _n in (_bs_nd.get("notes", []) if _bs_nd else []):
+                                _n["_student_name"] = _bs_s["name"]
+                                _bs_all.append(_n)
+                        except Exception:
+                            pass
+
+                    # Sort by date
+                    _bs_all.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+
+                    # Counts
+                    _bs_pos = len([n for n in _bs_all if n.get("note_type") == "positive"])
+                    _bs_con = len([n for n in _bs_all if n.get("note_type") == "concern"])
+                    _bs_inc = len([n for n in _bs_all if n.get("note_type") == "incident"])
+                    _bs_obs = len([n for n in _bs_all if n.get("note_type") == "observation"])
+
+                    # Metric cards
+                    _bs_c1, _bs_c2, _bs_c3, _bs_c4 = st.columns(4)
+                    with _bs_c1:
+                        st.markdown(
+                            '<div class="metric-card">'
+                            '<div class="metric-icon">🟢</div>'
+                            '<div class="metric-value" style="color:#10b981;">' + str(_bs_pos) + '</div>'
+                            '<div class="metric-label">Positive</div></div>',
+                            unsafe_allow_html=True,
+                        )
+                    with _bs_c2:
+                        st.markdown(
+                            '<div class="metric-card">'
+                            '<div class="metric-icon">🟠</div>'
+                            '<div class="metric-value" style="color:#f59e0b;">' + str(_bs_con) + '</div>'
+                            '<div class="metric-label">Concerns</div></div>',
+                            unsafe_allow_html=True,
+                        )
+                    with _bs_c3:
+                        st.markdown(
+                            '<div class="metric-card">'
+                            '<div class="metric-icon">🔴</div>'
+                            '<div class="metric-value" style="color:#ef4444;">' + str(_bs_inc) + '</div>'
+                            '<div class="metric-label">Incidents</div></div>',
+                            unsafe_allow_html=True,
+                        )
+                    with _bs_c4:
+                        st.markdown(
+                            '<div class="metric-card">'
+                            '<div class="metric-icon">🔵</div>'
+                            '<div class="metric-value" style="color:#3b82f6;">' + str(_bs_obs) + '</div>'
+                            '<div class="metric-label">Observations</div></div>',
+                            unsafe_allow_html=True,
+                        )
+
+                    # Recent notes
+                    if _bs_all:
+                        st.markdown("#### Recent Notes")
+                        _bs_recent = _bs_all[:5]
+                        _bs_icons = {
+                            "positive": ("🟢", "#10b981"),
+                            "concern": ("🟠", "#f59e0b"),
+                            "incident": ("🔴", "#ef4444"),
+                            "observation": ("🔵", "#3b82f6"),
+                        }
+                        for _n in _bs_recent:
+                            _nt = _n.get("note_type", "observation")
+                            _ic, _col = _bs_icons.get(_nt, ("⚪", "#6b7280"))
+                            _author = _n.get("author_name") or "Staff"
+                            _date = (_n.get("created_at") or "")[:10]
+                            _content = (_n.get("content") or "")[:120]
+                            if len(_n.get("content") or "") > 120:
+                                _content += "..."
+                            _student = _n.get("_student_name", "")
+
+                            st.markdown(
+                                '<div style="border-left:4px solid ' + _col + '; '
+                                'background:' + _col + '0F; padding:0.6rem 1rem; '
+                                'border-radius:8px; margin-bottom:0.5rem;">'
+                                '<div style="display:flex;justify-content:space-between;">'
+                                '<div><b style="color:' + _col + ';">' + _ic + ' ' + _nt.title() + '</b>'
+                                ' <span style="color:#6b7280;font-size:0.85rem;">— ' + _student + ' · ' + _author + '</span></div>'
+                                '<small style="color:#9ca3af;">' + _date + '</small>'
+                                '</div>'
+                                '<div style="margin-top:0.35rem;color:inherit;font-size:0.9rem;">' + _content + '</div>'
+                                '</div>',
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.info("No behavior notes yet.")
 
 
 # ============================================================
