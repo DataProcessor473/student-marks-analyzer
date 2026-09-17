@@ -918,6 +918,17 @@ def _create_postgres_tables():
             used_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
+                    """CREATE TABLE IF NOT EXISTS behavior_notes (
+                        id SERIAL PRIMARY KEY,
+                        student_id INTEGER NOT NULL,
+                        author_id INTEGER,
+                        author_name VARCHAR(255),
+                        note_type VARCHAR(50) DEFAULT 'observation',
+                        content TEXT NOT NULL,
+                        visible_to_parents INTEGER DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP
+                    )""",
                     """CREATE TABLE IF NOT EXISTS user_classes (
                         id SERIAL PRIMARY KEY,
                         user_id INTEGER NOT NULL,
@@ -1115,6 +1126,20 @@ def init_database():
                 class_name TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, class_name)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS behavior_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_id INTEGER NOT NULL,
+                author_id INTEGER,
+                author_name TEXT,
+                note_type TEXT DEFAULT 'observation',
+                content TEXT NOT NULL,
+                visible_to_parents INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP
             )
         """)
 
@@ -4176,6 +4201,228 @@ def list_all_classes_for_admin(admin=Depends(require_admin)):
                 from_table = []
             names = sorted(set([n for n in from_students + from_table if n]))
             return {"classes": names, "count": len(names)}
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+
+
+# ============================================================
+# BEHAVIOR NOTES (Feature 5)
+# ============================================================
+class BehaviorNoteCreate(BaseModel):
+    note_type: str = "observation"      # positive | concern | incident | observation
+    content: str
+    visible_to_parents: bool = False
+
+    @validator("note_type")
+    def v_note_type(cls, v):
+        allowed = ["positive", "concern", "incident", "observation"]
+        if v not in allowed:
+            raise ValueError(f"note_type must be one of {allowed}")
+        return v
+
+    @validator("content")
+    def v_content(cls, v):
+        if not v or len(v.strip()) < 2:
+            raise ValueError("Note content too short")
+        if len(v) > 2000:
+            raise ValueError("Note content too long (max 2000 chars)")
+        return v.strip()
+
+
+class BehaviorNoteUpdate(BaseModel):
+    note_type: Optional[str] = None
+    content: Optional[str] = None
+    visible_to_parents: Optional[bool] = None
+
+
+def _can_access_student(user, student_id: int) -> bool:
+    """Return True if the user can view/edit this student."""
+    try:
+        accessible = get_accessible_students(user)
+        return any(s["id"] == student_id for s in accessible)
+    except Exception:
+        return False
+
+
+@app.get("/students/{student_id}/notes")
+def list_behavior_notes(
+    student_id: int,
+    note_type: Optional[str] = None,
+    user=Depends(require_user),
+):
+    """List behavior notes for a student.
+
+    Filtering by role:
+      - admin/teacher: see all notes
+      - parent: only notes with visible_to_parents=1
+      - student: only notes with visible_to_parents=1
+    """
+    if not _can_access_student(user, student_id):
+        raise HTTPException(403, "Access denied")
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            # Base query
+            if user["role"] in ("admin", "teacher"):
+                query = "SELECT * FROM behavior_notes WHERE student_id=?"
+                params = [student_id]
+            else:
+                # parent / student: only public notes
+                query = "SELECT * FROM behavior_notes WHERE student_id=? AND visible_to_parents=1"
+                params = [student_id]
+
+            if note_type:
+                query += " AND note_type=?"
+                params.append(note_type)
+
+            query += " ORDER BY created_at DESC LIMIT 100"
+
+            cursor.execute(_q(query), params)
+            rows = cursor.fetchall()
+            notes = [dict(r) for r in rows]
+
+            # Normalize datetime formatting
+            for n in notes:
+                if n.get("created_at"):
+                    n["created_at"] = str(n["created_at"])[:19]
+                if n.get("updated_at"):
+                    n["updated_at"] = str(n["updated_at"])[:19]
+
+            return {"count": len(notes), "notes": notes}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+@app.post("/students/{student_id}/notes")
+def create_behavior_note(
+    student_id: int,
+    data: BehaviorNoteCreate,
+    user=Depends(require_role("admin", "teacher")),
+):
+    """Add a new behavior note (admin/teacher only)."""
+    if not _can_access_student(user, student_id):
+        raise HTTPException(403, "Access denied")
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                INSERT INTO behavior_notes
+                (student_id, author_id, author_name, note_type, content, visible_to_parents)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """), (
+                student_id,
+                user["id"],
+                user.get("full_name") or user["username"],
+                data.note_type,
+                data.content,
+                1 if data.visible_to_parents else 0,
+            ))
+            conn.commit()
+
+            if USE_POSTGRES:
+                cursor.execute(_q("SELECT id FROM behavior_notes ORDER BY id DESC LIMIT 1"))
+                row = cursor.fetchone()
+                note_id = row["id"] if isinstance(row, dict) else row[0]
+            else:
+                note_id = cursor.lastrowid
+
+            return {"message": "Note added", "note_id": note_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+@app.put("/students/{student_id}/notes/{note_id}")
+def update_behavior_note(
+    student_id: int,
+    note_id: int,
+    data: BehaviorNoteUpdate,
+    user=Depends(require_role("admin", "teacher")),
+):
+    """Update a note. Only the author or an admin can edit."""
+    if not _can_access_student(user, student_id):
+        raise HTTPException(403, "Access denied")
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("SELECT * FROM behavior_notes WHERE id=? AND student_id=?"),
+                           (note_id, student_id))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(404, "Note not found")
+
+            note = dict(row)
+            # Only the author or admin can edit
+            if user["role"] != "admin" and note.get("author_id") != user["id"]:
+                raise HTTPException(403, "You can only edit your own notes")
+
+            # Build update
+            updates = []
+            params = []
+            if data.note_type is not None:
+                updates.append("note_type=?")
+                params.append(data.note_type)
+            if data.content is not None:
+                updates.append("content=?")
+                params.append(data.content)
+            if data.visible_to_parents is not None:
+                updates.append("visible_to_parents=?")
+                params.append(1 if data.visible_to_parents else 0)
+
+            if not updates:
+                raise HTTPException(400, "Nothing to update")
+
+            updates.append("updated_at=?")
+            params.append(datetime.utcnow().isoformat())
+            params.append(note_id)
+
+            cursor.execute(_q(f"UPDATE behavior_notes SET {', '.join(updates)} WHERE id=?"),
+                           params)
+            conn.commit()
+            return {"message": "Note updated"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+@app.delete("/students/{student_id}/notes/{note_id}")
+def delete_behavior_note(
+    student_id: int,
+    note_id: int,
+    user=Depends(require_role("admin", "teacher")),
+):
+    """Delete a note. Only the author or admin can delete."""
+    if not _can_access_student(user, student_id):
+        raise HTTPException(403, "Access denied")
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("SELECT author_id FROM behavior_notes WHERE id=? AND student_id=?"),
+                           (note_id, student_id))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(404, "Note not found")
+
+            author_id = row["author_id"] if isinstance(row, dict) else row[0]
+            if user["role"] != "admin" and author_id != user["id"]:
+                raise HTTPException(403, "You can only delete your own notes")
+
+            cursor.execute(_q("DELETE FROM behavior_notes WHERE id=?"), (note_id,))
+            conn.commit()
+            return {"message": "Note deleted"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, f"Failed: {e}")
 
