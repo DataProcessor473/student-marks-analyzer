@@ -1810,6 +1810,129 @@ elif selected == t("analytics"):
             subj_df = pd.DataFrame(data["subject_analytics"])
             st.plotly_chart(style_chart(px.bar(subj_df, x="subject", y="average", color="average",
                                    color_continuous_scale="RdYlGn")), use_container_width=True)
+
+        # ============================================================
+        # SUBJECT × STUDENT HEATMAP
+        # ============================================================
+        st.markdown("---")
+        st.markdown("### 🔥 Subject-wise Heatmap")
+        st.caption("Every student's marks across every subject. Red = struggling, green = strong.")
+
+        # Fetch all students
+        _hm_resp = api_get("/students", params={"limit": 500})
+        _hm_data = handle_response(_hm_resp, show_error=False) if _hm_resp else None
+        _hm_students = _hm_data.get("students", []) if _hm_data else []
+
+        if not _hm_students:
+            st.info("No students available for heatmap.")
+        else:
+            # Optional class filter
+            _hm_classes = sorted(set(
+                s.get("class_name") for s in _hm_students if s.get("class_name")
+            ))
+            _hm_filter_col1, _hm_filter_col2 = st.columns([2, 2])
+            with _hm_filter_col1:
+                _hm_class = st.selectbox(
+                    "Filter by class",
+                    options=["All"] + _hm_classes,
+                    key="hm_class_filter",
+                )
+            with _hm_filter_col2:
+                _hm_sort = st.selectbox(
+                    "Sort students by",
+                    options=["Name", "Average (high → low)", "Average (low → high)"],
+                    key="hm_sort_mode",
+                )
+
+            _hm_filtered = _hm_students if _hm_class == "All" else [
+                s for s in _hm_students if s.get("class_name") == _hm_class
+            ]
+
+            # Build the matrix
+            _hm_subjects = []
+            for s in _hm_filtered:
+                for subj in s.get("subjects", []):
+                    if subj and subj not in _hm_subjects:
+                        _hm_subjects.append(subj)
+
+            # Sort students
+            if _hm_sort == "Average (high → low)":
+                _hm_filtered = sorted(_hm_filtered, key=lambda s: s.get("average", 0), reverse=True)
+            elif _hm_sort == "Average (low → high)":
+                _hm_filtered = sorted(_hm_filtered, key=lambda s: s.get("average", 0))
+            else:
+                _hm_filtered = sorted(_hm_filtered, key=lambda s: s.get("name", ""))
+
+            # Build 2D array: rows = students, cols = subjects
+            import plotly.graph_objects as _go
+
+            _hm_names = [s["name"] for s in _hm_filtered]
+            _hm_matrix = []
+            _hm_text = []  # hover text
+            for s in _hm_filtered:
+                subj_map = dict(zip(s.get("subjects", []), s.get("marks", [])))
+                row = []
+                txt_row = []
+                for subj in _hm_subjects:
+                    val = subj_map.get(subj)
+                    row.append(val if val is not None else None)
+                    txt_row.append(f"{val:.0f}" if val is not None else "—")
+                _hm_matrix.append(row)
+                _hm_text.append(txt_row)
+
+            if not _hm_subjects:
+                st.info("No subject data available.")
+            else:
+                _hm_colors = get_chart_colors()
+
+                _hm_fig = _go.Figure(data=_go.Heatmap(
+                    z=_hm_matrix,
+                    x=_hm_subjects,
+                    y=_hm_names,
+                    text=_hm_text,
+                    texttemplate="%{text}",
+                    textfont={"size": 11},
+                    colorscale=[
+                        [0.0, "#ef4444"],   # 0   → red
+                        [0.4, "#f59e0b"],   # 40  → amber
+                        [0.6, "#fbbf24"],   # 60  → yellow
+                        [0.8, "#84cc16"],   # 80  → lime
+                        [1.0, "#10b981"],   # 100 → green
+                    ],
+                    zmin=0,
+                    zmax=100,
+                    hovertemplate="<b>%{y}</b><br>%{x}: %{z:.0f}<extra></extra>",
+                    colorbar=dict(
+                        title=dict(text="Mark", font=dict(color=_hm_colors["text"])),
+                        tickfont=dict(color=_hm_colors["text"]),
+                    ),
+                ))
+                _hm_fig.update_layout(
+                    height=max(300, 40 + 28 * len(_hm_filtered)),
+                    xaxis=dict(side="top", tickfont=dict(color=_hm_colors["text"])),
+                    yaxis=dict(autorange="reversed", tickfont=dict(color=_hm_colors["text"])),
+                    margin=dict(l=20, r=20, t=60, b=20),
+                )
+                st.plotly_chart(style_chart(_hm_fig), use_container_width=True)
+
+                # Quick legend
+                _hm_legend_col1, _hm_legend_col2, _hm_legend_col3 = st.columns(3)
+                with _hm_legend_col1:
+                    st.markdown(
+                        '<span style="color:#ef4444;font-weight:600;">● 0-39</span> Needs urgent help',
+                        unsafe_allow_html=True,
+                    )
+                with _hm_legend_col2:
+                    st.markdown(
+                        '<span style="color:#fbbf24;font-weight:600;">● 40-79</span> Average',
+                        unsafe_allow_html=True,
+                    )
+                with _hm_legend_col3:
+                    st.markdown(
+                        '<span style="color:#10b981;font-weight:600;">● 80-100</span> Excellent',
+                        unsafe_allow_html=True,
+                    )
+
         if data.get("top_performers"):
             st.markdown("### 🏆 Top Performers")
             st.dataframe(pd.DataFrame(data["top_performers"]), use_container_width=True)
