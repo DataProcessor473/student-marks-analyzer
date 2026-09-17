@@ -1632,6 +1632,120 @@ if selected == t("dashboard"):
         st.info(f"👋 {t('welcome')}! Get started by adding students.")
 
 
+
+    # ============================================================
+    # BEHAVIOR SUMMARY (Feature 9)
+    # ============================================================
+    if user_role in ("parent", "admin", "teacher"):
+        st.markdown("---")
+        st.markdown("### 📝 Behavior Summary")
+
+        if user_role == "parent":
+            st.caption("Recent notes about your children (visible notes only).")
+        else:
+            st.caption("Recent behavior notes across all your students.")
+
+        # Fetch accessible students
+        _bs_resp = api_get("/students", params={"limit": 100})
+        _bs_data = handle_response(_bs_resp, show_error=False) if _bs_resp else None
+        _bs_students = _bs_data.get("students", []) if _bs_data else []
+
+        if not _bs_students:
+            st.info("No students to summarize.")
+        else:
+            # Aggregate notes across all accessible students (limit first 20)
+            _bs_all = []
+            for _bs_s in _bs_students[:20]:
+                try:
+                    _bs_nr = api_get("/students/" + str(_bs_s["id"]) + "/notes")
+                    _bs_nd = handle_response(_bs_nr, show_error=False) if _bs_nr else None
+                    for _n in (_bs_nd.get("notes", []) if _bs_nd else []):
+                        _n["_student_name"] = _bs_s["name"]
+                        _bs_all.append(_n)
+                except Exception:
+                    pass
+
+            # Sort by date
+            _bs_all.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+
+            # Counts
+            _bs_pos = len([n for n in _bs_all if n.get("note_type") == "positive"])
+            _bs_con = len([n for n in _bs_all if n.get("note_type") == "concern"])
+            _bs_inc = len([n for n in _bs_all if n.get("note_type") == "incident"])
+            _bs_obs = len([n for n in _bs_all if n.get("note_type") == "observation"])
+
+            # Metric cards
+            _bs_c1, _bs_c2, _bs_c3, _bs_c4 = st.columns(4)
+            with _bs_c1:
+                st.markdown(
+                    '<div class="metric-card">'
+                    '<div class="metric-icon">🟢</div>'
+                    '<div class="metric-value" style="color:#10b981;">' + str(_bs_pos) + '</div>'
+                    '<div class="metric-label">Positive</div></div>',
+                    unsafe_allow_html=True,
+                )
+            with _bs_c2:
+                st.markdown(
+                    '<div class="metric-card">'
+                    '<div class="metric-icon">🟠</div>'
+                    '<div class="metric-value" style="color:#f59e0b;">' + str(_bs_con) + '</div>'
+                    '<div class="metric-label">Concerns</div></div>',
+                    unsafe_allow_html=True,
+                )
+            with _bs_c3:
+                st.markdown(
+                    '<div class="metric-card">'
+                    '<div class="metric-icon">🔴</div>'
+                    '<div class="metric-value" style="color:#ef4444;">' + str(_bs_inc) + '</div>'
+                    '<div class="metric-label">Incidents</div></div>',
+                    unsafe_allow_html=True,
+                )
+            with _bs_c4:
+                st.markdown(
+                    '<div class="metric-card">'
+                    '<div class="metric-icon">🔵</div>'
+                    '<div class="metric-value" style="color:#3b82f6;">' + str(_bs_obs) + '</div>'
+                    '<div class="metric-label">Observations</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+            # Recent notes
+            if _bs_all:
+                st.markdown("#### Recent Notes")
+                _bs_recent = _bs_all[:5]
+                _bs_icons = {
+                    "positive": ("🟢", "#10b981"),
+                    "concern": ("🟠", "#f59e0b"),
+                    "incident": ("🔴", "#ef4444"),
+                    "observation": ("🔵", "#3b82f6"),
+                }
+                for _n in _bs_recent:
+                    _nt = _n.get("note_type", "observation")
+                    _ic, _col = _bs_icons.get(_nt, ("⚪", "#6b7280"))
+                    _author = _n.get("author_name") or "Staff"
+                    _date = (_n.get("created_at") or "")[:10]
+                    _content = (_n.get("content") or "")[:120]
+                    if len(_n.get("content") or "") > 120:
+                        _content += "..."
+                    _student = _n.get("_student_name", "")
+
+                    st.markdown(
+                        '<div style="border-left:4px solid ' + _col + '; '
+                        'background:' + _col + '0F; padding:0.6rem 1rem; '
+                        'border-radius:8px; margin-bottom:0.5rem;">'
+                        '<div style="display:flex;justify-content:space-between;">'
+                        '<div><b style="color:' + _col + ';">' + _ic + ' ' + _nt.title() + '</b>'
+                        ' <span style="color:#6b7280;font-size:0.85rem;">— ' + _student + ' · ' + _author + '</span></div>'
+                        '<small style="color:#9ca3af;">' + _date + '</small>'
+                        '</div>'
+                        '<div style="margin-top:0.35rem;color:inherit;font-size:0.9rem;">' + _content + '</div>'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.info("No behavior notes yet.")
+
+
 # ============================================================
 # PAGE: ANALYZE
 # ============================================================
