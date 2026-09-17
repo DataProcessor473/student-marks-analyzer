@@ -179,28 +179,37 @@ for k, v in defaults.items():
 # URL-PARAM SESSION PERSISTENCE (no external dependencies)
 # ============================================================
 def _restore_session_from_url():
-    """Restore session from URL token. Only validates token once every 5 minutes."""
+    """Restore session from URL token. Only logout on explicit 401."""
     _url_token = st.query_params.get("t")
 
     if st.session_state.get("logged_in") and st.session_state.get("token"):
         _last_check = st.session_state.get("_token_checked_at")
         _now_ts = time.time()
-        if _last_check and (_now_ts - _last_check) < 300:
+        # Only validate once every 10 minutes
+        if _last_check and (_now_ts - _last_check) < 600:
             return True
         try:
             _r = requests.get(
                 API_URL + "/auth/me",
                 headers={"Authorization": "Bearer " + st.session_state.token},
-                timeout=10,
+                timeout=30,
             )
             if _r.status_code == 200:
                 st.session_state["_token_checked_at"] = _now_ts
                 return True
+            elif _r.status_code == 401:
+                # ONLY logout on explicit 401 (token actually invalid)
+                st.session_state.logged_in = False
+                st.session_state.token = None
+                st.session_state.user = None
+            else:
+                # Server error (5xx) -- don't logout, just skip validation
+                st.session_state["_token_checked_at"] = _now_ts
+                return True
         except Exception:
-            pass
-        st.session_state.logged_in = False
-        st.session_state.token = None
-        st.session_state.user = None
+            # Network error / timeout -- don't logout, keep session
+            st.session_state["_token_checked_at"] = _now_ts
+            return True
 
     if _url_token:
         try:
