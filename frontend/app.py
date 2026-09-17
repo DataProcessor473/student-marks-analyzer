@@ -2890,61 +2890,99 @@ elif selected == t("fees"):
 
             # ---------- INVOICE GENERATION (Feature 8) ----------
             st.markdown("---")
-            st.markdown("#### 🧾 Generate Invoices")
-            st.caption("Download individual invoices or bulk-generate a ZIP.")
 
-            _inv_c1, _inv_c2 = st.columns([2, 2])
+            if user_role in ("admin", "teacher"):
+                # Admin/teacher: full invoice generation
+                st.markdown("#### Generate Invoices")
+                st.caption("Download individual invoices or bulk-generate a ZIP.")
 
-            with _inv_c1:
-                _inv_pay_opts = {
-                    f"#{p['id']} — {p.get('student_name','?')} — ₹{p.get('amount',0):.0f}": p["id"]
-                    for p in data["payments"][:50]
+                _inv_c1, _inv_c2 = st.columns([2, 2])
+
+                with _inv_c1:
+                    _inv_pay_opts = {
+                        f"#{p['id']} - {p.get('student_name','?')} - {p.get('amount',0):.0f}": p["id"]
+                        for p in data["payments"][:50]
+                    }
+                    _inv_sel = st.selectbox(
+                        "Select a payment",
+                        options=list(_inv_pay_opts.keys()),
+                        key="invoice_single_select",
+                    )
+                    if st.button("Download Invoice", type="primary", use_container_width=True, key="inv_single_btn"):
+                        _pid = _inv_pay_opts[_inv_sel]
+                        _ir = api_get(f"/fees/payment/{_pid}/invoice")
+                        if _ir and _ir.status_code == 200:
+                            st.download_button(
+                                "Save PDF",
+                                data=_ir.content,
+                                file_name=f"invoice_{_pid}.pdf",
+                                mime="application/pdf",
+                                use_container_width=True,
+                                key=f"inv_dl_{_pid}",
+                            )
+                        else:
+                            st.error("Failed to generate invoice")
+
+                with _inv_c2:
+                    _inv_bulk_opts = {
+                        f"#{p['id']} - {p.get('student_name','?')} - {p.get('amount',0):.0f}": p["id"]
+                        for p in data["payments"][:50]
+                    }
+                    _inv_bulk_sel = st.multiselect(
+                        "Select payments for bulk download",
+                        options=list(_inv_bulk_opts.keys()),
+                        key="invoice_bulk_select",
+                    )
+                    if st.button("Download ZIP", use_container_width=True, key="inv_bulk_btn",
+                                 disabled=not _inv_bulk_sel):
+                        _pids = [_inv_bulk_opts[k] for k in _inv_bulk_sel]
+                        _ir = api_post("/fees/invoices/bulk", json={"payment_ids": _pids})
+                        if _ir and _ir.status_code == 200:
+                            st.download_button(
+                                "Save ZIP",
+                                data=_ir.content,
+                                file_name=f"invoices_{len(_pids)}.zip",
+                                mime="application/zip",
+                                use_container_width=True,
+                                key="inv_bulk_dl",
+                            )
+                        else:
+                            st.error("Failed to generate ZIP")
+
+            else:
+                # Student/parent: simple receipt download
+                st.markdown("#### My Receipts")
+                st.caption("Download receipts for your payments")
+
+                _rc_pay_opts = {
+                    f"#{p['id']} - {p.get('fee_type','?').title()} - {p.get('amount',0):.0f} ({p.get('payment_date','')})": p["id"]
+                    for p in data["payments"]
                 }
-                _inv_sel = st.selectbox(
-                    "Select a payment",
-                    options=list(_inv_pay_opts.keys()),
-                    key="invoice_single_select",
-                )
-                if st.button("🖨️ Download Invoice", type="primary", use_container_width=True, key="inv_single_btn"):
-                    _pid = _inv_pay_opts[_inv_sel]
-                    _ir = api_get(f"/fees/payment/{_pid}/invoice")
-                    if _ir and _ir.status_code == 200:
-                        st.download_button(
-                            "💾 Save PDF",
-                            data=_ir.content,
-                            file_name=f"invoice_{_pid}.pdf",
-                            mime="application/pdf",
-                            use_container_width=True,
-                            key=f"inv_dl_{_pid}",
-                        )
-                    else:
-                        st.error("Failed to generate invoice")
 
-            with _inv_c2:
-                _inv_bulk_opts = {
-                    f"#{p['id']} — {p.get('student_name','?')} — ₹{p.get('amount',0):.0f}": p["id"]
-                    for p in data["payments"][:50]
-                }
-                _inv_bulk_sel = st.multiselect(
-                    "Select payments for bulk download",
-                    options=list(_inv_bulk_opts.keys()),
-                    key="invoice_bulk_select",
-                )
-                if st.button("📦 Download ZIP", use_container_width=True, key="inv_bulk_btn",
-                             disabled=not _inv_bulk_sel):
-                    _pids = [_inv_bulk_opts[k] for k in _inv_bulk_sel]
-                    _ir = api_post("/fees/invoices/bulk", json={"payment_ids": _pids})
-                    if _ir and _ir.status_code == 200:
-                        st.download_button(
-                            "💾 Save ZIP",
-                            data=_ir.content,
-                            file_name=f"invoices_{len(_pids)}.zip",
-                            mime="application/zip",
-                            use_container_width=True,
-                            key="inv_bulk_dl",
-                        )
-                    else:
-                        st.error("Failed to generate ZIP")
+                if not _rc_pay_opts:
+                    st.info("No payments on record yet.")
+                else:
+                    _rc_sel = st.selectbox(
+                        "Select a payment to download the receipt",
+                        options=list(_rc_pay_opts.keys()),
+                        key="student_receipt_select",
+                    )
+                    if st.button("Download My Receipt", type="primary",
+                                 use_container_width=True, key="student_receipt_btn"):
+                        _rpid = _rc_pay_opts[_rc_sel]
+                        _rr = api_get(f"/fees/payment/{_rpid}/invoice")
+                        if _rr and _rr.status_code == 200:
+                            st.download_button(
+                                "Save Receipt",
+                                data=_rr.content,
+                                file_name=f"receipt_{_rpid}.pdf",
+                                mime="application/pdf",
+                                use_container_width=True,
+                                key=f"student_receipt_dl_{_rpid}",
+                            )
+                        else:
+                            st.error("Failed to generate receipt")
+
 
 
         else:
