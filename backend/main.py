@@ -1,5 +1,5 @@
 """
-Student Marks Analyzer Ã¢â‚¬â€ Complete Backend (Phase 1-4)
+Student Marks Analyzer —— Complete Backend (Phase 1-4)
 Includes all features: auth, ML, notifications, themes, bulk import, PostgreSQL-ready.
 """
 from fastapi import FastAPI, HTTPException, Query, Depends, UploadFile, File, Request, BackgroundTasks, WebSocket, WebSocketDisconnect
@@ -246,7 +246,7 @@ os.makedirs(os.path.join(os.path.dirname(__file__), "models"), exist_ok=True)
 # ============================================================
 app = FastAPI(
     title="Student Marks Analyzer API",
-    description="Complete API Ã¢â‚¬â€ Phases 1-4 with ML, themes, preferences",
+    description="Complete API —— Phases 1-4 with ML, themes, preferences",
     version="12.0.0",
 )
 
@@ -677,7 +677,7 @@ def init_database():
                     """, ("admin2", "admin2@example.com", backup_hash, "Backup Admin", "admin"))
                     conn.commit()
                     print("[OK] Default admins created")
-                print("[OK] PostgreSQL mode Ã¢â‚¬â€ schema verified")
+                print("[OK] PostgreSQL mode —— schema verified")
         except Exception as e:
             print(f"[WARN] PostgreSQL init check failed: {e}")
         return
@@ -1505,19 +1505,19 @@ def detect_anomalies(marks):
 def generate_recommendations(marks, avg):
     recs = []
     if avg < 40:
-        recs += ["Ã°Å¸Å¡Â¨ Urgent: Consider additional tutoring", "Ã°Å¸â€œÅ¡ Focus on foundational concepts"]
+        recs += ["🚨 Urgent: Consider additional tutoring", "📚 Focus on foundational concepts"]
     elif avg < 60:
-        recs += ["Ã°Å¸â€œË† Need improvement: Study groups recommended", "Ã°Å¸â€œâ€¦ Create structured schedule"]
+        recs += ["📈 Need improvement: Study groups recommended", "📅 Create structured schedule"]
     elif avg < 75:
-        recs += ["Ã°Å¸â€™Â¡ Good performance: Focus on weak areas", "Ã°Å¸Å½Â¯ Set higher targets"]
+        recs += ["💡 Good performance: Focus on weak areas", "🎯 Set higher targets"]
     else:
-        recs += ["Ã°Å¸Å’Å¸ Excellent! Help peers", "Ã°Å¸Ââ€  Aim for top performance"]
+        recs += ["🌟 Excellent! Help peers", "🏆 Aim for top performance"]
     weak = [i for i, m in enumerate(marks) if m < 40]
     if weak:
-        recs.append(f"Ã¢Å¡Â Ã¯Â¸Â Focus on subjects {', '.join(str(i+1) for i in weak)}")
+        recs.append(f"⚠️ Focus on subjects {', '.join(str(i+1) for i in weak)}")
     strong = [i for i, m in enumerate(marks) if m >= 80]
     if strong:
-        recs.append(f"Ã¢Å“â€¦ Strong in subjects {', '.join(str(i+1) for i in strong)}")
+        recs.append(f"✅ Strong in subjects {', '.join(str(i+1) for i in strong)}")
     return recs
 
 
