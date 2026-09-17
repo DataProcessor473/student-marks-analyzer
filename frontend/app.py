@@ -28,10 +28,33 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Feature: API URL from Streamlit secrets (for cloud) or env (for local)
-try:
-    API_URL = st.secrets["API_URL"]
-except Exception:
-    API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
+def _resolve_api_url() -> str:
+    candidates = []
+    try:
+        if "API_URL" in st.secrets:
+            candidates.append(str(st.secrets["API_URL"]).strip())
+    except Exception:
+        pass
+    env_url = os.getenv("API_URL")
+    if env_url:
+        candidates.append(env_url.strip())
+    FALLBACK = "https://student-marks-analyzer-vju7.onrender.com"
+    candidates.append(FALLBACK)
+    for url in candidates:
+        if not url:
+            continue
+        if not url.startswith(("http://", "https://")):
+            continue
+        if "your-render" in url or "example.com" in url:
+            continue
+        is_cloud = bool(os.getenv("STREAMLIT_SHARING_MODE") or os.getenv("IS_STREAMLIT_CLOUD"))
+        if is_cloud and ("127.0.0.1" in url or "localhost" in url):
+            continue
+        return url.rstrip("/")
+    return FALLBACK
+
+
+API_URL = _resolve_api_url()
 
 SESSION_TIMEOUT_MINUTES = 30
 
@@ -1041,6 +1064,8 @@ if not st.session_state.logged_in:
                                     st.error("🚫 " + r.json().get("detail", "Account disabled"))
                                 elif r.status_code == 401:
                                     st.error("❌ Invalid username/email or password")
+                                elif r.status_code == 404:
+                                    st.error(f"❌ Endpoint not found: {API_URL}/auth/login")
                                 elif r.status_code == 429:
                                     st.warning("⏱️ Too many attempts. Wait a minute.")
                                 else:
@@ -1359,14 +1384,17 @@ with st.sidebar:
     )
 
     st.markdown("---")
+    st.caption(f"🔗 `{API_URL}`")
     try:
-        r = requests.get(f"{API_URL}/health", timeout=3)
+        r = requests.get(f"{API_URL}/health", timeout=5)
         if r.status_code == 200:
             st.success("🟢 Online")
         else:
-            st.error("🔴 Offline")
-    except Exception:
-        st.error("🔴 Connection Failed")
+            st.error(f"🔴 Offline (HTTP {r.status_code})")
+    except requests.exceptions.Timeout:
+        st.warning("🟡 Backend waking up (cold start)")
+    except Exception as _e:
+        st.error(f"🔴 {type(_e).__name__}")
 
     st.markdown("---")
     if st.button(f"🔑 {t('change_password').replace('🔑 ', '')}", use_container_width=True):
