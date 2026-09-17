@@ -12,6 +12,14 @@ import base64
 import io
 from streamlit_option_menu import option_menu
 
+try:
+    from streamlit_cookies_controller import CookieController
+    _cookie_ctrl = CookieController()
+    _COOKIES_AVAILABLE = True
+except Exception:
+    _cookie_ctrl = None
+    _COOKIES_AVAILABLE = False
+
 st.set_page_config(
     page_title="Student Marks Analyzer Pro",
     page_icon="🎓",
@@ -165,6 +173,56 @@ defaults = {
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+
+def _save_session_to_cookie():
+    if not _COOKIES_AVAILABLE:
+        return
+    try:
+        if st.session_state.get("token"):
+            _cookie_ctrl.set("sma_token", st.session_state.token)
+            _cookie_ctrl.set("sma_refresh", st.session_state.refresh_token or "")
+            if st.session_state.get("user"):
+                _cookie_ctrl.set("sma_user", json.dumps(st.session_state.user))
+            _cookie_ctrl.set("sma_lang", st.session_state.get("language", "en"))
+            _cookie_ctrl.set("sma_theme", st.session_state.get("theme", "light"))
+    except Exception:
+        pass
+
+
+def _clear_session_cookies():
+    if not _COOKIES_AVAILABLE:
+        return
+    try:
+        for key in ["sma_token", "sma_refresh", "sma_user", "sma_lang", "sma_theme"]:
+            _cookie_ctrl.remove(key)
+    except Exception:
+        pass
+
+
+def _restore_session_from_cookie():
+    if not _COOKIES_AVAILABLE:
+        return False
+    if st.session_state.get("logged_in"):
+        return True
+    try:
+        _token = _cookie_ctrl.get("sma_token")
+        _user_json = _cookie_ctrl.get("sma_user")
+        if _token and _user_json:
+            st.session_state.token = _token
+            st.session_state.refresh_token = _cookie_ctrl.get("sma_refresh") or None
+            st.session_state.user = json.loads(_user_json)
+            st.session_state.logged_in = True
+            st.session_state.last_activity = datetime.now()
+            st.session_state.language = _cookie_ctrl.get("sma_lang") or "en"
+            st.session_state.theme = _cookie_ctrl.get("sma_theme") or "light"
+            return True
+    except Exception:
+        pass
+    return False
+
+
+_restore_session_from_cookie()
 
 
 def apply_theme():
@@ -1092,6 +1150,7 @@ if not st.session_state.logged_in:
                             st.session_state.requires_2fa = False
                             st.session_state.pending_2fa_username = None
                             st.session_state.pending_2fa_password = None
+                            _save_session_to_cookie()
                             st.rerun()
                         else:
                             st.error(r.json().get("detail", "Invalid 2FA code"))
@@ -1138,6 +1197,7 @@ if not st.session_state.logged_in:
                                         st.session_state.theme = d["user"].get("theme", "light")
                                         st.session_state.logged_in = True
                                         st.session_state.last_activity = datetime.now()
+                                        _save_session_to_cookie()
                                         st.rerun()
                                 elif r.status_code == 423:
                                     st.error("🔒 " + r.json().get("detail", "Account locked"))
@@ -1536,6 +1596,7 @@ with st.sidebar:
             api_post("/auth/logout")
         except Exception:
             pass
+        _clear_session_cookies()
         for k in list(st.session_state.keys()):
             del st.session_state[k]
         st.rerun()
