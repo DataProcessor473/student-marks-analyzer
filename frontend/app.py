@@ -2840,6 +2840,152 @@ elif selected == t("profile"):
                     fig = px.line(tdf, x="created_at", y="average", markers=True)
                     st.plotly_chart(style_chart(fig), use_container_width=True)
 
+
+
+            # ============================================================
+            # BEHAVIOR NOTES (Feature 5)
+            # ============================================================
+            st.markdown("---")
+            st.markdown("### 📝 Behavior Notes")
+            st.caption("Private notes about this student. Teachers and admins can add notes; parents see only notes marked as visible.")
+
+            # Fetch notes
+            _notes_resp = api_get(f"/students/{sid}/notes")
+            _notes_data = handle_response(_notes_resp, show_error=False) if _notes_resp else None
+            _all_notes = _notes_data.get("notes", []) if _notes_data else []
+
+            # Filter + add row
+            _note_tabs = st.tabs(["📋 View Notes", "➕ Add Note"])
+
+            with _note_tabs[0]:
+                if not _all_notes:
+                    st.info("No notes yet for this student.")
+                else:
+                    # Filter
+                    _filter_col, _ = st.columns([2, 3])
+                    with _filter_col:
+                        _type_filter = st.selectbox(
+                            "Filter by type",
+                            options=["All", "positive", "concern", "incident", "observation"],
+                            key=f"notes_filter_{sid}",
+                        )
+
+                    _type_icons = {
+                        "positive": ("🟢", "#10b981"),
+                        "concern": ("🟠", "#f59e0b"),
+                        "incident": ("🔴", "#ef4444"),
+                        "observation": ("🔵", "#3b82f6"),
+                    }
+
+                    _shown = 0
+                    for _note in _all_notes:
+                        if _type_filter != "All" and _note.get("note_type") != _type_filter:
+                            continue
+                        _shown += 1
+                        _ntype = _note.get("note_type", "observation")
+                        _icon, _color = _type_icons.get(_ntype, ("⚪", "#6b7280"))
+                        _author = _note.get("author_name") or "Unknown"
+                        _created = (_note.get("created_at") or "")[:16]
+                        _is_public = bool(_note.get("visible_to_parents"))
+                        _visibility_badge = (
+                            '<span style="background:#10b98122;color:#10b981;'
+                            'padding:0.15rem 0.5rem;border-radius:6px;font-size:0.7rem;'
+                            'font-weight:600;margin-left:0.5rem;">👁 Visible to parents</span>'
+                            if _is_public else
+                            '<span style="background:#6b728022;color:#6b7280;'
+                            'padding:0.15rem 0.5rem;border-radius:6px;font-size:0.7rem;'
+                            'font-weight:600;margin-left:0.5rem;">🔒 Private</span>'
+                        )
+
+                        _note_id = _note.get("id")
+                        _can_delete = user_role == "admin" or _note.get("author_id") == user["id"]
+
+                        st.markdown(
+                            f"""
+                            <div style="border-left:4px solid {_color};
+                                        background:{_color}0F;
+                                        padding:0.75rem 1rem;
+                                        border-radius:8px;
+                                        margin-bottom:0.5rem;">
+                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                    <div>
+                                        <b style="color:{_color};">{_icon} {_ntype.title()}</b>
+                                        <span style="color:#6b7280;font-size:0.85rem;margin-left:0.5rem;">
+                                            — {_author} · {_created}
+                                        </span>
+                                        {_visibility_badge}
+                                    </div>
+                                </div>
+                                <div style="margin-top:0.5rem;color:inherit;">{_note.get('content', '')}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+
+                        if _can_delete:
+                            _dc1, _dc2, _ = st.columns([1, 1, 8])
+                            with _dc1:
+                                if st.button("🗑️ Delete", key=f"del_note_{_note_id}", use_container_width=True):
+                                    _dr = api_delete(f"/students/{sid}/notes/{_note_id}")
+                                    if _dr and _dr.status_code == 200:
+                                        st.success("Deleted")
+                                        st.rerun()
+                                    else:
+                                        st.error("Failed to delete")
+                            with _dc2:
+                                st.markdown(
+                                    f'<small style="color:#6b7280;">ID: {_note_id}</small>',
+                                    unsafe_allow_html=True,
+                                )
+
+                    if _shown == 0:
+                        st.info(f"No '{_type_filter}' notes found.")
+
+            with _note_tabs[1]:
+                if user_role not in ("admin", "teacher"):
+                    st.warning("Only admins and teachers can add behavior notes.")
+                else:
+                    with st.form(f"add_note_form_{sid}", clear_on_submit=True):
+                        _new_type = st.selectbox(
+                            "Note type",
+                            options=["positive", "concern", "incident", "observation"],
+                            index=3,
+                            key=f"new_note_type_{sid}",
+                        )
+                        _new_content = st.text_area(
+                            "Note",
+                            height=120,
+                            placeholder="Describe the observation...",
+                            key=f"new_note_content_{sid}",
+                        )
+                        _new_visible = st.checkbox(
+                            "Make visible to parents",
+                            value=False,
+                            key=f"new_note_visible_{sid}",
+                        )
+                        _submit = st.form_submit_button("➕ Add Note", type="primary", use_container_width=True)
+
+                        if _submit:
+                            if not _new_content or len(_new_content.strip()) < 2:
+                                st.error("Note content is too short.")
+                            else:
+                                _payload = {
+                                    "note_type": _new_type,
+                                    "content": _new_content.strip(),
+                                    "visible_to_parents": bool(_new_visible),
+                                }
+                                _ar = api_post(f"/students/{sid}/notes", json=_payload)
+                                if _ar and _ar.status_code == 200:
+                                    st.success("✅ Note added!")
+                                    st.rerun()
+                                else:
+                                    try:
+                                        _err = _ar.json().get("detail", "Failed")
+                                    except Exception:
+                                        _err = "Unknown error"
+                                    st.error(f"❌ {_err}")
+
+
             # Parents
             if prof.get("parents"):
                 st.markdown("### 👨‍👩‍👧 Linked Parents")
