@@ -1657,10 +1657,13 @@ with st.sidebar:
         ]
 
     # Restore previously-selected page from URL if present
+    # Use session_state to survive reruns without depending on URL only
     _url_page = st.query_params.get("p")
+    _saved_page = st.session_state.get("_last_selected_page")
+    _candidate = _saved_page or _url_page
     _default_idx = 0
-    if _url_page and _url_page in menu_options:
-        _default_idx = menu_options.index(_url_page)
+    if _candidate and _candidate in menu_options:
+        _default_idx = menu_options.index(_candidate)
 
     selected = option_menu(
         menu_title=None, options=menu_options, icons=menu_icons,
@@ -1678,9 +1681,11 @@ with st.sidebar:
         }
     )
 
-    # Save current page to URL for persistence across refreshes
+    # Save current page for the session (no rerun triggered)
+    st.session_state["_last_selected_page"] = selected
+    # Also persist to URL for cross-refresh survival
     try:
-        if selected:
+        if selected and st.query_params.get("p") != selected:
             st.query_params["p"] = selected
     except Exception:
         pass
