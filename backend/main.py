@@ -6140,7 +6140,7 @@ def shutdown_event():
 # ============================================================
 # HEALTH
 # ============================================================
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def home():
     return {
         "message": "Student Marks Analyzer API",
@@ -6182,7 +6182,7 @@ def favicon():
     return Response(status_code=204)
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     try:
         with get_db_connection() as conn:
