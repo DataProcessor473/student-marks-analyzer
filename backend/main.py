@@ -6204,3 +6204,170 @@ def health():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+# ============================================================
+# EMAIL DIGEST (Feature 24) - appended at end of file
+# ============================================================
+def _digest_preview_data():
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    yesterday = (now - timedelta(hours=24)).isoformat()
+    today = now.date().isoformat()
+    out = {"new_students": 0, "attendance_records": 0, "badges": 0,
+           "reminders": 0, "received": 0.0, "pending": 0.0,
+           "present": 0, "absent": 0, "late": 0}
+    try:
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(_q("SELECT COUNT(*) AS c FROM students WHERE created_at >= ?"), (yesterday,))
+            r = cur.fetchone()
+            out["new_students"] = r["c"] if isinstance(r, dict) else r[0]
+            cur.execute(_q("SELECT COUNT(*) AS c FROM attendance WHERE created_at >= ?"), (yesterday,))
+            r = cur.fetchone()
+            out["attendance_records"] = r["c"] if isinstance(r, dict) else r[0]
+            try:
+                cur.execute(_q("SELECT COUNT(*) AS c FROM user_achievements WHERE awarded_at >= ?"), (yesterday,))
+                r = cur.fetchone()
+                out["badges"] = r["c"] if isinstance(r, dict) else r[0]
+            except Exception:
+                pass
+            try:
+                cur.execute(_q("SELECT COUNT(*) AS c FROM fee_reminders WHERE sent_at >= ? AND status = 'sent'"), (yesterday,))
+                r = cur.fetchone()
+                out["reminders"] = r["c"] if isinstance(r, dict) else r[0]
+            except Exception:
+                pass
+            try:
+                cur.execute(_q("SELECT COALESCE(SUM(amount),0) AS t FROM fee_payments WHERE status = 'paid' AND payment_date >= ?"), (today,))
+                r = cur.fetchone()
+                out["received"] = float((r["t"] if isinstance(r, dict) else r[0]) or 0)
+            except Exception:
+                pass
+            try:
+                cur.execute(_q("SELECT COALESCE(SUM(amount),0) AS t FROM fee_payments WHERE status = 'pending'"))
+                r = cur.fetchone()
+                out["pending"] = float((r["t"] if isinstance(r, dict) else r[0]) or 0)
+            except Exception:
+                pass
+            cur.execute(_q("SELECT status, COUNT(*) AS c FROM attendance WHERE date = ? GROUP BY status"), (today,))
+            for r in cur.fetchall():
+                s = (r["status"] if isinstance(r, dict) else r[0]) or ""
+                c = r["c"] if isinstance(r, dict) else r[1]
+                if s.lower() == "present":
+                    out["present"] = c
+                elif s.lower() == "absent":
+                    out["absent"] = c
+                elif s.lower() == "late":
+                    out["late"] = c
+    except Exception as e:
+        print("[WARN] digest preview: " + str(e))
+    return out
+
+
+def _digest_build_html(data):
+    from datetime import datetime
+    parts = []
+    parts.append("<html><body style='font-family:Arial,sans-serif;padding:20px;'>")
+    parts.append("<h2 style='color:#4f46e5;'>Daily Digest</h2>")
+    parts.append("<p>" + datetime.now().strftime("%A, %d %B %Y") + "</p>")
+    parts.append("<h3>Activity (last 24h)</h3><ul>")
+    parts.append("<li>New students: " + str(data.get("new_students", 0)) + "</li>")
+    parts.append("<li>Attendance records: " + str(data.get("attendance_records", 0)) + "</li>")
+    parts.append("<li>Badges awarded: " + str(data.get("badges", 0)) + "</li>")
+    parts.append("<li>Fee reminders sent: " + str(data.get("reminders", 0)) + "</li>")
+    parts.append("</ul>")
+    parts.append("<h3>Finance</h3><ul>")
+    parts.append("<li>Received today: Rs. " + str(data.get("received", 0)) + "</li>")
+    parts.append("<li>Pending: Rs. " + str(data.get("pending", 0)) + "</li>")
+    parts.append("</ul>")
+    parts.append("<h3>Attendance today</h3><ul>")
+    parts.append("<li>Present: " + str(data.get("present", 0)) + "</li>")
+    parts.append("<li>Absent: " + str(data.get("absent", 0)) + "</li>")
+    parts.append("<li>Late: " + str(data.get("late", 0)) + "</li>")
+    parts.append("</ul></body></html>")
+    return "".join(parts)
+
+
+def send_admin_digest(override_recipients=None, digest_type="daily"):
+    data = _digest_preview_data()
+    html = _digest_build_html(data)
+    recipients = []
+    if override_recipients:
+        recipients = [e.strip() for e in override_recipients if e and "@" in e]
+    else:
+        try:
+            with get_db_connection() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT email FROM users WHERE role = 'admin' AND is_active = 1 AND email_verified = 1")
+                recipients = [r["email"] if isinstance(r, dict) else r[0] for r in cur.fetchall()]
+        except Exception as e:
+            return {"sent": 0, "failed": 0, "error": str(e)}
+    if not recipients:
+        return {"sent": 0, "failed": 0, "error": "No admin recipients"}
+    sent = 0
+    failed = 0
+    from datetime import datetime as _dt
+    subject = "Daily Digest - " + _dt.now().strftime("%d %b %Y")
+    for e in recipients:
+        try:
+            if send_email_notification(e, subject, html):
+                sent += 1
+            else:
+                failed += 1
+        except Exception:
+            failed += 1
+    try:
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            import json as _j
+            cur.execute(_q("INSERT INTO email_digests (digest_type, recipients, summary, status) VALUES (?, ?, ?, ?)"),
+                        (digest_type, ",".join(recipients), _j.dumps(data),
+                         "sent" if failed == 0 else "partial"))
+            conn.commit()
+    except Exception as e:
+        print("[WARN] digest log: " + str(e))
+    print("[DIGEST] sent=" + str(sent) + " failed=" + str(failed))
+    return {"sent": sent, "failed": failed, "recipients": recipients}
+
+
+@app.get("/admin/digest/preview")
+def admin_digest_preview(admin=Depends(require_admin)):
+    try:
+        return {"summary": _digest_preview_data()}
+    except Exception as e:
+        raise HTTPException(500, "Failed: " + str(e))
+
+
+class DigestSendReq(BaseModel):
+    recipients: Optional[List[str]] = None
+    digest_type: str = "daily"
+
+
+@app.post("/admin/digest/send")
+def admin_digest_send(data: Optional[DigestSendReq] = None, admin=Depends(require_admin)):
+    try:
+        kwargs = {}
+        if data and data.recipients:
+            kwargs["override_recipients"] = data.recipients
+        if data and data.digest_type:
+            kwargs["digest_type"] = data.digest_type
+        return {"message": "Digest send complete", "result": send_admin_digest(**kwargs)}
+    except Exception as e:
+        raise HTTPException(500, "Failed: " + str(e))
+
+
+@app.get("/admin/digest/history")
+def admin_digest_history(limit: int = 30, admin=Depends(require_admin)):
+    try:
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(_q("SELECT id, digest_type, recipients, status, sent_at FROM email_digests ORDER BY sent_at DESC LIMIT ?"), (limit,))
+            rows = [dict(r) for r in cur.fetchall()]
+            for r in rows:
+                if r.get("sent_at"):
+                    r["sent_at"] = str(r["sent_at"])[:19]
+            return {"count": len(rows), "digests": rows}
+    except Exception as e:
+        raise HTTPException(500, "Failed: " + str(e))
+
