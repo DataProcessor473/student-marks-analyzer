@@ -918,6 +918,13 @@ def _create_postgres_tables():
             used_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
+                    """CREATE TABLE IF NOT EXISTS user_classes (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL,
+                        class_name VARCHAR(100) NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, class_name)
+                    )""",
     ]
     try:
         with get_db_connection() as conn:
@@ -1098,6 +1105,16 @@ def init_database():
                 relationship TEXT DEFAULT 'parent',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(parent_user_id, student_id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_classes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                class_name TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, class_name)
             )
         """)
 
@@ -3005,6 +3022,17 @@ def get_accessible_students(user):
         cursor = conn.cursor()
         if user["role"] in ["admin", "teacher"]:
             cursor.execute("SELECT * FROM students ORDER BY id DESC")
+        elif user["role"] == "teacher":
+            # Filter by teacher's assigned classes
+            cursor.execute(_q("SELECT class_name FROM user_classes WHERE user_id=?"), (user["id"],))
+            assigned_rows = cursor.fetchall()
+            assigned = [r["class_name"] if isinstance(r, dict) else r[0] for r in assigned_rows]
+            if not assigned:
+                # Teacher has no assigned classes -> see nothing
+                return []
+            ph = ",".join("?" * len(assigned))
+            cursor.execute(_q(f"SELECT * FROM students WHERE class_name IN ({ph}) ORDER BY id DESC"),
+                           assigned)
         elif user["role"] == "parent":
             cursor.execute(_q("""SELECT s.* FROM students s
                 JOIN parent_children pc ON s.id = pc.student_id
@@ -4066,6 +4094,90 @@ def class_names(user=Depends(require_user)):
         from_table = [r["name"] for r in cursor.fetchall()]
         all_names = list(set(from_students + from_table))
         return {"names": sorted(all_names)}
+
+
+
+
+# ============================================================
+# TEACHER CLASS ASSIGNMENTS
+# ============================================================
+class ClassAssignRequest(BaseModel):
+    class_names: List[str]
+
+
+@app.get("/auth/users/{user_id}/classes")
+def get_user_classes(user_id: int, admin=Depends(require_admin)):
+    """List class names assigned to a user (usually a teacher)."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("SELECT class_name FROM user_classes WHERE user_id=? ORDER BY class_name"),
+                           (user_id,))
+            rows = cursor.fetchall()
+            classes = [r["class_name"] if isinstance(r, dict) else r[0] for r in rows]
+            return {"user_id": user_id, "classes": classes, "count": len(classes)}
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+@app.post("/auth/users/{user_id}/classes")
+def set_user_classes(user_id: int, data: ClassAssignRequest, admin=Depends(require_admin)):
+    """Replace a user's class list with the given list."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            # Verify user exists
+            cursor.execute(_q("SELECT id FROM users WHERE id=?"), (user_id,))
+            if not cursor.fetchone():
+                raise HTTPException(404, "User not found")
+            # Clear existing
+            cursor.execute(_q("DELETE FROM user_classes WHERE user_id=?"), (user_id,))
+            # Insert new
+            for cn in data.class_names:
+                cn = (cn or "").strip()
+                if not cn:
+                    continue
+                cursor.execute(_q("INSERT INTO user_classes (user_id, class_name) VALUES (?, ?)"),
+                               (user_id, cn))
+            conn.commit()
+        return {"message": f"Assigned {len(data.class_names)} class(es)", "user_id": user_id,
+                "classes": data.class_names}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+@app.delete("/auth/users/{user_id}/classes/{class_name}")
+def remove_user_class(user_id: int, class_name: str, admin=Depends(require_admin)):
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("DELETE FROM user_classes WHERE user_id=? AND class_name=?"),
+                           (user_id, class_name))
+            conn.commit()
+            return {"message": "Removed", "user_id": user_id, "class_name": class_name}
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+@app.get("/auth/classes/all")
+def list_all_classes_for_admin(admin=Depends(require_admin)):
+    """Return all distinct class names in the system (from students + classes table)."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT DISTINCT class_name FROM students WHERE class_name IS NOT NULL")
+            from_students = [r["class_name"] if isinstance(r, dict) else r[0] for r in cursor.fetchall()]
+            try:
+                cursor.execute("SELECT name FROM classes")
+                from_table = [r["name"] if isinstance(r, dict) else r[0] for r in cursor.fetchall()]
+            except Exception:
+                from_table = []
+            names = sorted(set([n for n in from_students + from_table if n]))
+            return {"classes": names, "count": len(names)}
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
 
 
 # ============================================================
