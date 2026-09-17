@@ -1690,24 +1690,28 @@ with st.sidebar:
             "journal-check", "cash-coin", "bell", "broadcast", "gear",
         ]
 
-    # Restore previously-selected page from URL if present
-    # Use session_state to survive reruns without depending on URL only
+    # Native radio-based menu (no external dependency, no double-click bug)
+    _menu_key = "main_nav_radio_" + user_role
+
+    # Get last selected page (from session state or URL)
     _url_page = st.query_params.get("p")
     _saved_page = st.session_state.get("_last_selected_page")
     _candidate = _saved_page or _url_page
-    _default_idx = 0
+    _start_value = None
     if _candidate and _candidate in menu_options:
-        _default_idx = menu_options.index(_candidate)
+        _start_value = _candidate
 
-    # Native radio-based menu (no external dependency, no double-click bug)
-    _menu_key = "main_nav_radio_" + user_role
+    # If no session value yet, initialize with the start value
     if _menu_key not in st.session_state:
-        st.session_state[_menu_key] = _default_idx
+        st.session_state[_menu_key] = _start_value or menu_options[0]
+
+    # Validate that the stored value is still a valid option
+    if st.session_state.get(_menu_key) not in menu_options:
+        st.session_state[_menu_key] = menu_options[0]
 
     selected = st.radio(
         "Navigation",
         options=menu_options,
-        index=st.session_state.get(_menu_key, _default_idx),
         key=_menu_key,
         label_visibility="collapsed",
     )
