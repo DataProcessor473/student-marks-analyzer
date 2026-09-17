@@ -918,6 +918,15 @@ def _create_postgres_tables():
             used_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
+                    """CREATE TABLE IF NOT EXISTS grade_schemes (
+                        id SERIAL PRIMARY KEY,
+                        name VARCHAR(100) UNIQUE NOT NULL,
+                        description TEXT,
+                        boundaries TEXT NOT NULL,
+                        is_default INTEGER DEFAULT 0,
+                        created_by INTEGER,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )""",
                     """CREATE TABLE IF NOT EXISTS achievements (
                         id SERIAL PRIMARY KEY,
                         code VARCHAR(50) UNIQUE NOT NULL,
@@ -977,6 +986,12 @@ def _bootstrap_postgres():
         _seed_builtin_achievements()
     except Exception as _e:
         print(f"[WARN] Achievement seeding failed: {_e}")
+
+    # Seed default grade schemes (Feature 7)
+    try:
+        _seed_default_schemes()
+    except Exception as _e:
+        print(f"[WARN] Grade scheme seeding failed: {_e}")
 
     try:
         with get_db_connection() as conn:
@@ -1150,6 +1165,18 @@ def init_database():
                 class_name TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, class_name)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS grade_schemes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                description TEXT,
+                boundaries TEXT NOT NULL,
+                is_default INTEGER DEFAULT 0,
+                created_by INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -4679,6 +4706,202 @@ def create_custom_badge(data: BadgeCreate, admin=Depends(require_admin)):
                 """), (code, data.name, data.description, data.icon))
             conn.commit()
             return {"message": "Badge created", "code": code}
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+
+
+# ============================================================
+# CUSTOM GRADE SCHEMES (Feature 7)
+# ============================================================
+DEFAULT_SCHEMES = [
+    {
+        "name": "Standard",
+        "description": "Default 7-tier grading (A+ to F)",
+        "boundaries": [
+            {"grade": "A+", "min": 90, "max": 100, "points": 10},
+            {"grade": "A",  "min": 80, "max": 89.99, "points": 9},
+            {"grade": "B",  "min": 70, "max": 79.99, "points": 8},
+            {"grade": "C",  "min": 60, "max": 69.99, "points": 7},
+            {"grade": "D",  "min": 50, "max": 59.99, "points": 6},
+            {"grade": "E",  "min": 40, "max": 49.99, "points": 5},
+            {"grade": "F",  "min": 0,  "max": 39.99, "points": 0},
+        ],
+    },
+    {
+        "name": "CBSE Indian",
+        "description": "Indian CBSE-style grading",
+        "boundaries": [
+            {"grade": "A1", "min": 91, "max": 100, "points": 10},
+            {"grade": "A2", "min": 81, "max": 90.99, "points": 9},
+            {"grade": "B1", "min": 71, "max": 80.99, "points": 8},
+            {"grade": "B2", "min": 61, "max": 70.99, "points": 7},
+            {"grade": "C1", "min": 51, "max": 60.99, "points": 6},
+            {"grade": "C2", "min": 41, "max": 50.99, "points": 5},
+            {"grade": "D",  "min": 33, "max": 40.99, "points": 4},
+            {"grade": "E",  "min": 0,  "max": 32.99, "points": 0},
+        ],
+    },
+]
+
+
+class GradeBoundary(BaseModel):
+    grade: str
+    min: float
+    max: float
+    points: int = 0
+
+
+class GradeSchemeCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    boundaries: List[GradeBoundary]
+    is_default: bool = False
+
+
+class GradeSchemeUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    boundaries: Optional[List[GradeBoundary]] = None
+    is_default: Optional[bool] = None
+
+
+def _seed_default_schemes():
+    """Insert built-in schemes if table is empty."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) AS c FROM grade_schemes")
+            row = cursor.fetchone()
+            count = row["c"] if isinstance(row, dict) else row[0]
+            if count > 0:
+                return
+            for i, s in enumerate(DEFAULT_SCHEMES):
+                import json as _j
+                cursor.execute(_q("""
+                    INSERT INTO grade_schemes (name, description, boundaries, is_default, created_by)
+                    VALUES (?, ?, ?, ?, NULL)
+                """), (s["name"], s["description"], _j.dumps(s["boundaries"]), 1 if i == 0 else 0))
+            conn.commit()
+            print(f"[OK] Seeded {len(DEFAULT_SCHEMES)} default grade schemes")
+    except Exception as e:
+        print(f"[WARN] Could not seed grade schemes: {e}")
+
+
+@app.get("/grade-schemes")
+def list_grade_schemes(user=Depends(require_user)):
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM grade_schemes ORDER BY is_default DESC, name ASC")
+            schemes = []
+            for r in cursor.fetchall():
+                d = dict(r)
+                import json as _j
+                try:
+                    d["boundaries"] = _j.loads(d.get("boundaries") or "[]")
+                except Exception:
+                    d["boundaries"] = []
+                if d.get("created_at"):
+                    d["created_at"] = str(d["created_at"])[:19]
+                schemes.append(d)
+            return {"count": len(schemes), "schemes": schemes}
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+@app.get("/grade-schemes/{scheme_id}")
+def get_grade_scheme(scheme_id: int, user=Depends(require_user)):
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("SELECT * FROM grade_schemes WHERE id=?"), (scheme_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(404, "Scheme not found")
+            d = dict(row)
+            import json as _j
+            try:
+                d["boundaries"] = _j.loads(d.get("boundaries") or "[]")
+            except Exception:
+                d["boundaries"] = []
+            return d
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+@app.post("/grade-schemes/create")
+def create_grade_scheme(data: GradeSchemeCreate, admin=Depends(require_admin)):
+    import json as _j
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            boundaries_json = _j.dumps([b.dict() for b in data.boundaries])
+            if data.is_default:
+                cursor.execute("UPDATE grade_schemes SET is_default=0")
+            cursor.execute(_q("""
+                INSERT INTO grade_schemes (name, description, boundaries, is_default, created_by)
+                VALUES (?, ?, ?, ?, ?)
+            """), (data.name, data.description, boundaries_json,
+                   1 if data.is_default else 0, admin["id"]))
+            conn.commit()
+            return {"message": "Scheme created"}
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+@app.put("/grade-schemes/{scheme_id}")
+def update_grade_scheme(scheme_id: int, data: GradeSchemeUpdate, admin=Depends(require_admin)):
+    import json as _j
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("SELECT * FROM grade_schemes WHERE id=?"), (scheme_id,))
+            if not cursor.fetchone():
+                raise HTTPException(404, "Scheme not found")
+            updates = []
+            params = []
+            if data.name is not None:
+                updates.append("name=?"); params.append(data.name)
+            if data.description is not None:
+                updates.append("description=?"); params.append(data.description)
+            if data.boundaries is not None:
+                updates.append("boundaries=?"); params.append(_j.dumps([b.dict() for b in data.boundaries]))
+            if data.is_default:
+                cursor.execute("UPDATE grade_schemes SET is_default=0")
+                updates.append("is_default=?"); params.append(1)
+            if not updates:
+                raise HTTPException(400, "Nothing to update")
+            params.append(scheme_id)
+            cursor.execute(_q(f"UPDATE grade_schemes SET {', '.join(updates)} WHERE id=?"), params)
+            conn.commit()
+            return {"message": "Updated"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+@app.delete("/grade-schemes/{scheme_id}")
+def delete_grade_scheme(scheme_id: int, admin=Depends(require_admin)):
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("SELECT is_default FROM grade_schemes WHERE id=?"), (scheme_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(404, "Not found")
+            is_default = row["is_default"] if isinstance(row, dict) else row[0]
+            if is_default:
+                raise HTTPException(400, "Cannot delete the default scheme")
+            cursor.execute(_q("DELETE FROM grade_schemes WHERE id=?"), (scheme_id,))
+            conn.commit()
+            return {"message": "Deleted"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, f"Failed: {e}")
 
