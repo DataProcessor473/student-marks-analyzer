@@ -6371,3 +6371,164 @@ def admin_digest_history(limit: int = 30, admin=Depends(require_admin)):
     except Exception as e:
         raise HTTPException(500, "Failed: " + str(e))
 
+
+# ============================================================
+# EXAM RESULTS BULK IMPORT (Feature 14)
+# ============================================================
+class ExamImportRequest(BaseModel):
+    csv_text: str
+
+
+class ExamImportCommitRequest(BaseModel):
+    rows: List[Dict[str, Any]]
+
+
+@app.post("/exam-results/preview")
+def exam_import_preview(data: ExamImportRequest, user=Depends(require_role("admin", "teacher"))):
+    """Parse and validate CSV text."""
+    try:
+        import io as _io
+        import csv as _csv
+
+        reader = _csv.DictReader(_io.StringIO(data.csv_text))
+        fmap = {f.lower().strip(): f for f in (reader.fieldnames or [])}
+
+        required = ["student_name", "subject", "marks"]
+        missing = [r for r in required if r not in fmap]
+        if missing:
+            raise HTTPException(400, "Missing columns: " + ", ".join(missing))
+
+        # Load student names to ID map
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT id, name FROM students")
+            name_map = {}
+            for r in cur.fetchall():
+                n = (r["name"] if isinstance(r, dict) else r[0]) or ""
+                i = r["id"] if isinstance(r, dict) else r[1]
+                name_map[n.strip().lower()] = i
+
+        preview = []
+        errors = []
+        for i, row in enumerate(reader, start=2):
+            try:
+                name = str(row.get(fmap["student_name"], "")).strip()
+                subject = str(row.get(fmap["subject"], "")).strip()
+                exam_name = str(row.get(fmap.get("exam_name", ""), "") or "Assessment").strip()
+                marks_raw = str(row.get(fmap["marks"], "")).strip()
+                total_raw = str(row.get(fmap.get("total_marks", ""), "") or "100").strip()
+
+                if not name:
+                    errors.append({"row": i, "error": "Empty student name"})
+                    continue
+                if name.lower() not in name_map:
+                    errors.append({"row": i, "error": "Unknown student: " + name})
+                    continue
+                if not subject:
+                    errors.append({"row": i, "error": "Empty subject"})
+                    continue
+
+                try:
+                    marks = float(marks_raw)
+                    total_marks = float(total_raw)
+                except ValueError:
+                    errors.append({"row": i, "error": "Invalid marks: " + marks_raw})
+                    continue
+
+                if total_marks <= 0:
+                    errors.append({"row": i, "error": "total_marks must be > 0"})
+                    continue
+                if marks < 0 or marks > total_marks:
+                    errors.append({"row": i, "error": "marks must be 0..total_marks"})
+                    continue
+
+                pct = (marks / total_marks) * 100.0
+                preview.append({
+                    "row": i,
+                    "student_id": name_map[name.lower()],
+                    "student_name": name,
+                    "subject": subject,
+                    "exam_name": exam_name,
+                    "marks": marks,
+                    "total_marks": total_marks,
+                    "percentage": round(pct, 2),
+                })
+            except Exception as e:
+                errors.append({"row": i, "error": str(e)})
+
+        return {
+            "valid_rows": len(preview),
+            "error_count": len(errors),
+            "total": len(preview) + len(errors),
+            "preview": preview[:100],
+            "errors": errors[:30],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, "Parse error: " + str(e))
+
+
+@app.post("/exam-results/commit")
+def exam_import_commit(data: ExamImportCommitRequest, user=Depends(require_role("admin", "teacher"))):
+    """Commit validated rows."""
+    if not data.rows:
+        raise HTTPException(400, "No rows to import")
+    if len(data.rows) > 500:
+        raise HTTPException(400, "Too many rows (max 500)")
+
+    imported = 0
+    failed = []
+    affected_students = set()
+
+    with get_db_connection() as conn:
+        cur = conn.cursor()
+        for i, row in enumerate(data.rows):
+            try:
+                sid = int(row.get("student_id"))
+                subject = str(row.get("subject", "")).strip()
+                exam_name = str(row.get("exam_name", "") or "Assessment").strip()
+                marks = float(row.get("marks", 0))
+                total_marks = float(row.get("total_marks", 100))
+                if total_marks <= 0:
+                    raise ValueError("total_marks must be > 0")
+                pct = (marks / total_marks) * 100.0
+
+                # Insert as performance trend
+                cur.execute(_q("""
+                    INSERT INTO performance_trends
+                    (student_id, semester, average, grade, total_marks, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """), (
+                    sid,
+                    exam_name,
+                    round(pct, 2),
+                    None,
+                    marks,
+                    datetime.now().isoformat(),
+                ))
+                imported += 1
+                affected_students.add(sid)
+            except Exception as e:
+                failed.append({"row": i, "error": str(e)})
+        conn.commit()
+
+    return {
+        "message": "Imported " + str(imported) + " rows",
+        "imported": imported,
+        "failed_count": len(failed),
+        "failed": failed[:20],
+        "affected_students": list(affected_students),
+    }
+
+
+@app.get("/exam-results/template")
+def exam_import_template(user=Depends(require_role("admin", "teacher"))):
+    """Return CSV template."""
+    template = "student_name,subject,exam_name,marks,total_marks\n"
+    template += "Test Student A,Math,Mid-Term 2024,85,100\n"
+    template += "Test Student A,Science,Mid-Term 2024,78,100\n"
+    template += "Test Student B,Math,Mid-Term 2024,92,100\n"
+    return Response(content=template, media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=exam_results_template.csv"})
+
