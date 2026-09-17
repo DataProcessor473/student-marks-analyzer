@@ -2548,6 +2548,29 @@ elif selected == t("exams"):
                 available = [c for c in display_cols if c in df.columns]
                 st.dataframe(df[available], use_container_width=True)
 
+                # Add-to-calendar for each exam
+                st.markdown("#### 📅 Add an Exam to Your Calendar")
+                _cal_c1, _cal_c2 = st.columns([3, 2])
+                with _cal_c1:
+                    _cal_opts = {f"{e['name']} ({e['exam_date']})": e["id"] for e in exams}
+                    _cal_sel = st.selectbox("Select exam", list(_cal_opts.keys()), key="cal_exam_sel")
+                with _cal_c2:
+                    st.markdown("&nbsp;", unsafe_allow_html=True)
+                    if st.button("📅 Download .ics", use_container_width=True, key="cal_exam_btn"):
+                        _eid = _cal_opts[_cal_sel]
+                        _r = api_get(f"/exams/{_eid}/ics")
+                        if _r and _r.status_code == 200:
+                            st.download_button(
+                                "💾 Save Calendar File",
+                                data=_r.content,
+                                file_name=f"exam_{_eid}.ics",
+                                mime="text/calendar",
+                                use_container_width=True,
+                                key="cal_exam_dl",
+                            )
+                        else:
+                            st.error("Failed to generate calendar file")
+
             if user_role in ["admin", "teacher"]:
                 st.markdown("### 🗑️ Delete Exam")
                 exam_opts = {f"{e['name']} ({e['exam_date']})": e["id"] for e in exams}
@@ -2628,6 +2651,21 @@ elif selected == t("timetable"):
                                           values="subject", aggfunc="first")
                 df_pivot = df_pivot.reindex(days)
                 st.dataframe(df_pivot, use_container_width=True)
+
+                # Export as .ics
+                if st.button("📅 Export Timetable to Calendar", key="tt_ics_btn"):
+                    _tr = api_get(f"/timetable/class/{selected_class}/ics")
+                    if _tr and _tr.status_code == 200:
+                        st.download_button(
+                            "💾 Save Calendar File",
+                            data=_tr.content,
+                            file_name=f"timetable_{selected_class}.ics",
+                            mime="text/calendar",
+                            use_container_width=True,
+                            key="tt_ics_dl",
+                        )
+                    else:
+                        st.error("Failed to generate timetable .ics")
         else:
             st.info("No timetable entries yet")
 
