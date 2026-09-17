@@ -975,6 +975,62 @@ def _create_postgres_tables():
         print(f"[ERROR] Failed to create Postgres tables: {e}")
 
 
+DEFAULT_SCHEMES = [
+    {
+        "name": "Standard",
+        "description": "Default 7-tier grading (A+ to F)",
+        "boundaries": [
+            {"grade": "A+", "min": 90, "max": 100, "points": 10},
+            {"grade": "A",  "min": 80, "max": 89.99, "points": 9},
+            {"grade": "B",  "min": 70, "max": 79.99, "points": 8},
+            {"grade": "C",  "min": 60, "max": 69.99, "points": 7},
+            {"grade": "D",  "min": 50, "max": 59.99, "points": 6},
+            {"grade": "E",  "min": 40, "max": 49.99, "points": 5},
+            {"grade": "F",  "min": 0,  "max": 39.99, "points": 0},
+        ],
+    },
+    {
+        "name": "CBSE Indian",
+        "description": "Indian CBSE-style grading",
+        "boundaries": [
+            {"grade": "A1", "min": 91, "max": 100, "points": 10},
+            {"grade": "A2", "min": 81, "max": 90.99, "points": 9},
+            {"grade": "B1", "min": 71, "max": 80.99, "points": 8},
+            {"grade": "B2", "min": 61, "max": 70.99, "points": 7},
+            {"grade": "C1", "min": 51, "max": 60.99, "points": 6},
+            {"grade": "C2", "min": 41, "max": 50.99, "points": 5},
+            {"grade": "D",  "min": 33, "max": 40.99, "points": 4},
+            {"grade": "E",  "min": 0,  "max": 32.99, "points": 0},
+        ],
+    },
+]
+
+
+
+
+def _seed_default_schemes():
+    """Insert built-in schemes if table is empty."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) AS c FROM grade_schemes")
+            row = cursor.fetchone()
+            count = row["c"] if isinstance(row, dict) else row[0]
+            if count > 0:
+                return
+            for i, s in enumerate(DEFAULT_SCHEMES):
+                import json as _j
+                cursor.execute(_q("""
+                    INSERT INTO grade_schemes (name, description, boundaries, is_default, created_by)
+                    VALUES (?, ?, ?, ?, NULL)
+                """), (s["name"], s["description"], _j.dumps(s["boundaries"]), 1 if i == 0 else 0))
+            conn.commit()
+            print(f"[OK] Seeded {len(DEFAULT_SCHEMES)} default grade schemes")
+    except Exception as e:
+        print(f"[WARN] Could not seed grade schemes: {e}")
+
+
+
 def _bootstrap_postgres():
     """Call right after init_database() to ensure Postgres schema exists and admins are seeded."""
     if not USE_POSTGRES:
@@ -4715,37 +4771,6 @@ def create_custom_badge(data: BadgeCreate, admin=Depends(require_admin)):
 # ============================================================
 # CUSTOM GRADE SCHEMES (Feature 7)
 # ============================================================
-DEFAULT_SCHEMES = [
-    {
-        "name": "Standard",
-        "description": "Default 7-tier grading (A+ to F)",
-        "boundaries": [
-            {"grade": "A+", "min": 90, "max": 100, "points": 10},
-            {"grade": "A",  "min": 80, "max": 89.99, "points": 9},
-            {"grade": "B",  "min": 70, "max": 79.99, "points": 8},
-            {"grade": "C",  "min": 60, "max": 69.99, "points": 7},
-            {"grade": "D",  "min": 50, "max": 59.99, "points": 6},
-            {"grade": "E",  "min": 40, "max": 49.99, "points": 5},
-            {"grade": "F",  "min": 0,  "max": 39.99, "points": 0},
-        ],
-    },
-    {
-        "name": "CBSE Indian",
-        "description": "Indian CBSE-style grading",
-        "boundaries": [
-            {"grade": "A1", "min": 91, "max": 100, "points": 10},
-            {"grade": "A2", "min": 81, "max": 90.99, "points": 9},
-            {"grade": "B1", "min": 71, "max": 80.99, "points": 8},
-            {"grade": "B2", "min": 61, "max": 70.99, "points": 7},
-            {"grade": "C1", "min": 51, "max": 60.99, "points": 6},
-            {"grade": "C2", "min": 41, "max": 50.99, "points": 5},
-            {"grade": "D",  "min": 33, "max": 40.99, "points": 4},
-            {"grade": "E",  "min": 0,  "max": 32.99, "points": 0},
-        ],
-    },
-]
-
-
 class GradeBoundary(BaseModel):
     grade: str
     min: float
@@ -4766,27 +4791,6 @@ class GradeSchemeUpdate(BaseModel):
     boundaries: Optional[List[GradeBoundary]] = None
     is_default: Optional[bool] = None
 
-
-def _seed_default_schemes():
-    """Insert built-in schemes if table is empty."""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) AS c FROM grade_schemes")
-            row = cursor.fetchone()
-            count = row["c"] if isinstance(row, dict) else row[0]
-            if count > 0:
-                return
-            for i, s in enumerate(DEFAULT_SCHEMES):
-                import json as _j
-                cursor.execute(_q("""
-                    INSERT INTO grade_schemes (name, description, boundaries, is_default, created_by)
-                    VALUES (?, ?, ?, ?, NULL)
-                """), (s["name"], s["description"], _j.dumps(s["boundaries"]), 1 if i == 0 else 0))
-            conn.commit()
-            print(f"[OK] Seeded {len(DEFAULT_SCHEMES)} default grade schemes")
-    except Exception as e:
-        print(f"[WARN] Could not seed grade schemes: {e}")
 
 
 @app.get("/grade-schemes")
