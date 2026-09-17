@@ -179,26 +179,46 @@ for k, v in defaults.items():
 # URL-PARAM SESSION PERSISTENCE (no external dependencies)
 # ============================================================
 def _restore_session_from_url():
-    if st.session_state.get("logged_in"):
-        return True
-    try:
-        _t = st.query_params.get("t")
-        if _t:
-            _url = API_URL + "/auth/me"
-            _r = requests.get(_url, headers={"Authorization": "Bearer " + _t}, timeout=10)
+    """Restore session from URL token. Also validates existing tokens."""
+    _url_token = st.query_params.get("t")
+
+    if st.session_state.get("logged_in") and st.session_state.get("token"):
+        try:
+            _r = requests.get(
+                API_URL + "/auth/me",
+                headers={"Authorization": "Bearer " + st.session_state.token},
+                timeout=10,
+            )
+            if _r.status_code == 200:
+                return True
+        except Exception:
+            pass
+        st.session_state.logged_in = False
+        st.session_state.token = None
+        st.session_state.user = None
+
+    if _url_token:
+        try:
+            _r = requests.get(
+                API_URL + "/auth/me",
+                headers={"Authorization": "Bearer " + _url_token},
+                timeout=10,
+            )
             if _r.status_code == 200:
                 _user = _r.json()
-                st.session_state.token = _t
+                st.session_state.token = _url_token
                 st.session_state.user = _user
                 st.session_state.logged_in = True
                 st.session_state.last_activity = datetime.now()
                 st.session_state.language = _user.get("language", "en")
                 st.session_state.theme = _user.get("theme", "light")
                 return True
-        # invalid token -> clear
-        st.query_params.clear()
-    except Exception:
-        pass
+        except Exception:
+            pass
+        try:
+            st.query_params.clear()
+        except Exception:
+            pass
     return False
 
 
