@@ -3048,7 +3048,7 @@ elif selected == t("timetable"):
 # PAGE: ASSIGNMENTS
 # ============================================================
 elif selected == t("assignments") and user_role == "student":
-    st.markdown(f'<div class="main-header"><h1>My Assignments</h1><p>Assignments for your class</p></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="main-header"><h1>My Assignments</h1><p>Submit your work</p></div>', unsafe_allow_html=True)
 
     _asn_resp = api_get("/students", params={"limit": 10}, use_cache=True)
     _asn_data = handle_response(_asn_resp, show_error=False) if _asn_resp else None
@@ -3058,6 +3058,8 @@ elif selected == t("assignments") and user_role == "student":
         st.warning("Your account is not linked to a student record yet.")
     else:
         _my_class = _asn_students[0].get("class_name")
+        _my_student_id = _asn_students[0]["id"]
+
         try:
             _ar = api_get("/assignments", use_cache=True)
             _ad = handle_response(_ar, show_error=False) if _ar else None
@@ -3080,6 +3082,7 @@ elif selected == t("assignments") and user_role == "student":
             _my_assignments.sort(key=_sort_key)
 
             for a in _my_assignments:
+                _aid = a["id"]
                 try:
                     _due = _dt.fromisoformat(a["due_date"][:10]).date()
                     _days = (_due - _today).days
@@ -3092,16 +3095,24 @@ elif selected == t("assignments") and user_role == "student":
                     elif _days <= 2:
                         _urg = "Due in " + str(_days) + " day(s)"
                         _col = "#f59e0b"
-                    elif _days <= 7:
-                        _urg = "Due in " + str(_days) + " days"
-                        _col = "#fbbf24"
                     else:
                         _urg = "Due in " + str(_days) + " days"
                         _col = "#10b981"
                 except Exception:
                     _urg = "-"
                     _col = "#6b7280"
-                _html = (
+
+                # Get submission status
+                _my_sub = None
+                try:
+                    _sr = api_get("/assignments/" + str(_aid) + "/my-submission", use_cache=True)
+                    _sd = handle_response(_sr, show_error=False) if _sr else None
+                    _my_sub = _sd.get("submission") if _sd else None
+                except Exception:
+                    pass
+
+                # Header
+                st.markdown(
                     '<div style="border-left:4px solid ' + _col + ';padding:0.75rem 1rem;'
                     + 'background:rgba(99,102,241,0.03);border-radius:8px;margin-bottom:0.5rem;">'
                     + '<div style="display:flex;justify-content:space-between;">'
@@ -3112,115 +3123,136 @@ elif selected == t("assignments") and user_role == "student":
                     + 'Subject: ' + str(a.get("subject") or "-")
                     + ' | Due: ' + str(a.get("due_date") or "-")
                     + ' | Marks: ' + str(a.get("total_marks", 100))
-                    + '</div></div>'
+                    + '</div>'
+                    + '</div>',
+                    unsafe_allow_html=True,
                 )
-                st.markdown(_html, unsafe_allow_html=True)
+
+                # Submission status + form
+                with st.expander("View / Submit", expanded=(_my_sub is None)):
+                    if _my_sub:
+                        _st = _my_sub.get("status") or "pending"
+                        if _st == "graded":
+                            st.success("Graded: " + str(_my_sub.get("marks_obtained", 0)) + " / " + str(a.get("total_marks", 100)))
+                            if _my_sub.get("feedback"):
+                                st.info("Feedback: " + _my_sub["feedback"])
+                        elif _st == "submitted":
+                            st.info("Submitted on " + str(_my_sub.get("submitted_at", "")))
+                            st.caption("Waiting for grading.")
+                    else:
+                        st.caption("Not submitted yet")
+
+                    # Submit form (allow resubmission until graded)
+                    if not _my_sub or _my_sub.get("status") != "graded":
+                        with st.form("submit_form_" + str(_aid)):
+                            _file = st.file_uploader("Upload file (PDF, JPG, PNG, max 5 MB)",
+                                                     type=["pdf", "jpg", "jpeg", "png"],
+                                                     key="sub_file_" + str(_aid))
+                            _text = st.text_area("Or type your answer",
+                                                height=80,
+                                                key="sub_text_" + str(_aid))
+                            if st.form_submit_button("Submit Assignment", type="primary"):
+                                try:
+                                    _files = None
+                                    _params = {"text_answer": _text or ""}
+                                    if _file is not None:
+                                        _files = {"file": (_file.name, _file.getvalue(), _file.type)}
+                                    _up_url = API_URL + "/assignments/" + str(_aid) + "/submit"
+                                    _hdrs = get_auth_headers()
+                                    if _files:
+                                        _resp = requests.post(_up_url, params=_params, files=_files,
+                                                              headers=_hdrs, timeout=60)
+                                    else:
+                                        _resp = requests.post(_up_url, params=_params,
+                                                              headers=_hdrs, timeout=60)
+                                    if _resp.status_code == 200:
+                                        st.success("Submitted!")
+                                        st.balloons()
+                                        st.cache_data.clear()
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        try:
+                                            _err = _resp.json().get("detail", _resp.text[:200])
+                                        except Exception:
+                                            _err = _resp.text[:200]
+                                        st.error("Failed: " + str(_err))
+                                except Exception as _e:
+                                    st.error("Error: " + str(_e))
+
 
 
 elif selected == t("assignments"):
-    st.markdown(f'<div class="main-header"><h1>{t("assignments")}</h1><p>Track assignments and submissions</p></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="main-header"><h1>{t("assignments")}</h1><p>Track and grade submissions</p></div>', unsafe_allow_html=True)
 
-    if user_role in ("admin", "teacher"):
-        tab1, tab2 = st.tabs(["📋 All", "➕ Create"])
+    _r = api_get("/assignments", use_cache=True)
+    _d = handle_response(_r, show_error=False) if _r else None
+    _all_assignments = _d.get("assignments", []) if _d else []
+
+    if not _all_assignments:
+        st.info("No assignments yet. Create one via the ➕ Create tab.")
     else:
-        tab1 = st.tabs(["📋 All"])[0]
-        tab2 = None
+        _opts = {f"{a['title']} - {a.get('class_name','')} (Due {a['due_date']})": a["id"] for a in _all_assignments}
+        _sel = st.selectbox("Select an assignment to view submissions", list(_opts.keys()), key="grade_asn_sel")
+        _aid = _opts[_sel]
 
-    with tab1:
-        r = api_get("/assignments")
-        data = handle_response(r, show_error=False) if r else None
-        assignments = data.get("assignments", []) if data else []
+        try:
+            _sr = api_get("/assignments/" + str(_aid) + "/submissions", use_cache=True)
+            _sd = handle_response(_sr, show_error=False) if _sr else None
+        except Exception:
+            _sd = None
 
-        if assignments:
-            st.metric("Total Assignments", len(assignments))
-            for a in assignments:
-                with st.expander(f"📝 {a['title']} — Due: {a['due_date'][:10]}"):
-                    c1, c2, c3 = st.columns(3)
-                    with c1:
-                        st.markdown(f"**Class:** {a.get('class_name', 'N/A')}")
-                        st.markdown(f"**Subject:** {a.get('subject', 'N/A')}")
-                    with c2:
-                        st.markdown(f"**Total Marks:** {a.get('total_marks', 100)}")
-                        st.markdown(f"**Due Date:** {a.get('due_date', 'N/A')}")
-                    with c3:
-                        stats = a.get("stats", {})
-                        st.markdown(f"**Submitted:** {stats.get('submitted', 0)}/{stats.get('total', 0)}")
-                        st.markdown(f"**Graded:** {stats.get('graded', 0)}")
+        if _sd:
+            _a = _sd.get("assignment", {})
+            _subs = _sd.get("submissions", [])
 
-                    if a.get("description"):
-                        st.markdown(f"**Description:** {a['description']}")
+            _mc1, _mc2, _mc3 = st.columns(3)
+            with _mc1: render_metric("Total", _sd.get("total_students", 0), "Students")
+            with _mc2: render_metric("Submitted", _sd.get("submitted_count", 0), "Submitted")
+            with _mc3: render_metric("Graded", _sd.get("graded_count", 0), "Graded")
 
-                    if user_role in ["admin", "teacher"]:
-                        if st.button(f"👥 View Submissions", key=f"sub_{a['id']}"):
-                            r = api_get(f"/assignments/{a['id']}/submissions")
-                            subs = handle_response(r, show_error=False) if r else None
-                            if subs and subs.get("submissions"):
-                                sub_df = pd.DataFrame(subs["submissions"])
-                                st.dataframe(sub_df, use_container_width=True)
-        else:
-            st.info("No assignments yet")
+            st.markdown("---")
+            st.markdown("### Submissions")
 
-    if tab2 is not None:
-      with tab2:
-        if user_role in ["admin", "teacher"]:
-            st.markdown("### Create Assignment")
-            with st.form("create_assignment"):
-                at = st.text_input("Title *", placeholder="Chapter 5 Homework")
-                ad = st.text_area("Description")
-                c1, c2 = st.columns(2)
-                with c1:
-                    ac = st.text_input("Class", placeholder="CS-A")
-                    asub = st.text_input("Subject", placeholder="Mathematics")
-                with c2:
-                    adue = st.date_input("Due Date")
-                    atm = st.number_input("Total Marks", 0, 500, 100)
+            for _s in _subs:
+                _name = _s.get("student_name", "Unknown")
+                _status = _s.get("status") or "not-submitted"
+                _icon = {"graded": "green", "submitted": "orange"}.get(_status, "gray")
 
-                st.markdown("**🔁 Recurrence**")
-                rec_c1, rec_c2 = st.columns(2)
-                with rec_c1:
-                    _rec_type = st.selectbox(
-                        "Repeat",
-                        options=["none", "weekly", "monthly"],
-                        index=0,
-                        key="rec_type",
-                        help="Create multiple assignments automatically",
-                    )
-                with rec_c2:
-                    _rec_end = st.date_input(
-                        "Repeat until",
-                        value=adue + timedelta(days=42),
-                        key="rec_end",
-                        disabled=(_rec_type == "none"),
-                    )
+                with st.expander(_name + " [" + _status + "]"):
+                    if _s.get("submitted_at"):
+                        st.caption("Submitted: " + str(_s.get("submitted_at")))
 
-                if st.form_submit_button("➕ Create", type="primary"):
-                    if not at:
-                        st.warning("Enter title")
+                    if _s.get("feedback") and _status != "graded":
+                        st.caption("Student answer: " + str(_s.get("feedback")))
+                    elif _s.get("feedback"):
+                        st.caption("Answer: " + str(_s.get("feedback")))
+
+                    # Grading form
+                    if _s.get("submission_id"):
+                        _cur_marks = _s.get("marks_obtained") or 0
+                        with st.form("grade_" + str(_s["submission_id"])):
+                            _marks = st.number_input("Marks", min_value=0.0,
+                                                     max_value=float(_a.get("total_marks", 100)),
+                                                     value=float(_cur_marks),
+                                                     step=1.0,
+                                                     key="marks_" + str(_s["submission_id"]))
+                            _fb = st.text_area("Feedback", value=_s.get("feedback") or "",
+                                              height=60,
+                                              key="fb_" + str(_s["submission_id"]))
+                            if st.form_submit_button("Save Grade", type="primary"):
+                                _gr = api_put("/assignments/submissions/" + str(_s["submission_id"]) + "/grade",
+                                              json={"marks_obtained": _marks, "feedback": _fb})
+                                if _gr and _gr.status_code == 200:
+                                    st.success("Graded!")
+                                    st.cache_data.clear()
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to grade")
                     else:
-                        payload = {
-                            "title": at, "description": ad or None,
-                            "class_name": ac or None, "subject": asub or None,
-                            "due_date": adue.isoformat(), "total_marks": atm,
-                            "recurrence": _rec_type,
-                            "recurrence_end": _rec_end.isoformat() if _rec_type != "none" else None,
-                        }
-                        r = api_post("/assignments/create", json=payload)
-                        if r and r.status_code == 200:
-                            _resp = r.json()
-                            _gen = _resp.get("generated", 1)
-                            if _gen > 1:
-                                st.success("Created " + str(_gen) + " assignments!")
-                                st.balloons()
-                            else:
-                                st.success("Created!")
-                            time.sleep(0.7)
-                            st.rerun()
-                        else:
-                            try:
-                                _err = r.json().get("detail", "Failed")
-                            except Exception:
-                                _err = "Failed"
-                            st.error(str(_err))
+                        st.info("Student has not submitted yet.")
+
 
 
 # ============================================================
