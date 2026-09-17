@@ -7221,3 +7221,32 @@ def grade_submission(submission_id: int, data: GradeRequest,
     except Exception as e:
         raise HTTPException(500, "Failed: " + str(e))
 
+
+@app.post("/debug/upload-test")
+async def debug_upload(request: Request, user=Depends(require_user)):
+    """TEMP: Show exactly what the backend receives on upload."""
+    out = {
+        "content_type": request.headers.get("content-type", "MISSING"),
+        "query_params": dict(request.query_params),
+        "form_keys": [],
+        "form_values": {},
+        "files_detected": [],
+    }
+    try:
+        _form = await request.form()
+        out["form_keys"] = list(_form.keys())
+        for k in _form.keys():
+            v = _form[k]
+            if hasattr(v, "read"):
+                out["files_detected"].append({
+                    "key": k,
+                    "filename": getattr(v, "filename", "?"),
+                    "content_type": getattr(v, "content_type", "?"),
+                    "has_read": True,
+                })
+            else:
+                out["form_values"][k] = str(v)[:100]
+    except Exception as e:
+        out["error"] = type(e).__name__ + ": " + str(e)
+    return out
+
