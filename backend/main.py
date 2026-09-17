@@ -7028,3 +7028,168 @@ def timetable_to_ics(class_name: str, user=Depends(require_user)):
         headers={"Content-Disposition": "attachment; filename=timetable_" + class_name + ".ics"},
     )
 
+
+# ============================================================
+# ASSIGNMENT SUBMISSIONS (Student submit + Teacher grade)
+# ============================================================
+SUBMISSION_DIR = os.path.join(UPLOAD_DIR, "submissions")
+os.makedirs(SUBMISSION_DIR, exist_ok=True)
+
+
+@app.post("/assignments/{assignment_id}/submit")
+async def submit_assignment(
+    assignment_id: int,
+    file: UploadFile = File(None),
+    text_answer: str = "",
+    user=Depends(require_role("student", "admin", "teacher")),
+):
+    """Student submits an assignment (file and/or text)."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("SELECT * FROM assignments WHERE id=?"), (assignment_id,))
+            assignment = cursor.fetchone()
+            if not assignment:
+                raise HTTPException(404, "Assignment not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, "DB error: " + str(e))
+
+    # Find linked student record
+    student_id = None
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("SELECT id FROM students WHERE user_id=?"), (user["id"],))
+            row = cursor.fetchone()
+            if row:
+                student_id = row["id"] if isinstance(row, dict) else row[0]
+    except Exception:
+        pass
+
+    if not student_id and user["role"] in ("admin", "teacher"):
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM students ORDER BY id LIMIT 1")
+                row = cursor.fetchone()
+                if row:
+                    student_id = row["id"] if isinstance(row, dict) else row[0]
+        except Exception:
+            pass
+
+    if not student_id:
+        raise HTTPException(400, "Your account is not linked to a student record")
+
+    # Handle file upload
+    file_url = None
+    if file is not None:
+        if file.content_type not in ["application/pdf", "image/jpeg", "image/jpg", "image/png"]:
+            raise HTTPException(400, "Only PDF, JPG, PNG files allowed")
+        content = await file.read()
+        if len(content) > 5 * 1024 * 1024:
+            raise HTTPException(400, "File too large (max 5 MB)")
+        ext = os.path.splitext(file.filename or "file.pdf")[1].lower() or ".pdf"
+        fname = "submission_" + str(assignment_id) + "_" + str(student_id) + "_" + str(int(datetime.now().timestamp())) + ext
+        fpath = os.path.join(SUBMISSION_DIR, fname)
+        with open(fpath, "wb") as f:
+            f.write(content)
+        file_url = "/uploads/submissions/" + fname
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("SELECT id FROM assignment_submissions WHERE assignment_id=? AND student_id=?"),
+                           (assignment_id, student_id))
+            existing = cursor.fetchone()
+
+            if existing:
+                cursor.execute(_q("""
+                    UPDATE assignment_submissions
+                    SET status='submitted', submitted_at=?, feedback=?
+                    WHERE assignment_id=? AND student_id=?
+                """), (datetime.now().isoformat(), text_answer or None, assignment_id, student_id))
+            else:
+                cursor.execute(_q("""
+                    INSERT INTO assignment_submissions
+                    (assignment_id, student_id, status, submitted_at, feedback)
+                    VALUES (?, ?, 'submitted', ?, ?)
+                """), (assignment_id, student_id, datetime.now().isoformat(), text_answer or None))
+
+            conn.commit()
+
+        log_live_event(user["id"], "assignment_submitted", {
+            "assignment_id": assignment_id, "student_id": student_id,
+        })
+        return {"message": "Submitted successfully", "student_id": student_id}
+    except Exception as e:
+        raise HTTPException(500, "Save error: " + str(e))
+
+
+@app.get("/assignments/{assignment_id}/my-submission")
+def my_submission(assignment_id: int, user=Depends(require_user)):
+    """Get the current student's submission for an assignment."""
+    student_id = None
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("SELECT id FROM students WHERE user_id=?"), (user["id"],))
+            row = cursor.fetchone()
+            if row:
+                student_id = row["id"] if isinstance(row, dict) else row[0]
+    except Exception:
+        pass
+
+    if not student_id:
+        return {"submission": None}
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                SELECT * FROM assignment_submissions
+                WHERE assignment_id=? AND student_id=?
+            """), (assignment_id, student_id))
+            row = cursor.fetchone()
+            if not row:
+                return {"submission": None}
+            d = dict(row) if not isinstance(row, dict) else row
+            if d.get("submitted_at"):
+                d["submitted_at"] = str(d["submitted_at"])[:19]
+            return {"submission": d}
+    except Exception as e:
+        raise HTTPException(500, "Failed: " + str(e))
+
+
+class GradeRequest(BaseModel):
+    marks_obtained: float
+    feedback: Optional[str] = None
+
+
+@app.put("/assignments/submissions/{submission_id}/grade")
+def grade_submission(submission_id: int, data: GradeRequest,
+                     user=Depends(require_role("admin", "teacher"))):
+    """Teacher grades a submission."""
+    if data.marks_obtained < 0:
+        raise HTTPException(400, "Marks cannot be negative")
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("SELECT * FROM assignment_submissions WHERE id=?"), (submission_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(404, "Submission not found")
+            cursor.execute(_q("""
+                UPDATE assignment_submissions
+                SET marks_obtained=?, feedback=?, status='graded'
+                WHERE id=?
+            """), (data.marks_obtained, data.feedback, submission_id))
+            conn.commit()
+        log_live_event(user["id"], "assignment_graded", {"submission_id": submission_id})
+        return {"message": "Graded"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, "Failed: " + str(e))
+
