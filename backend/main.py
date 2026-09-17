@@ -1,5 +1,5 @@
 """
-Student Marks Analyzer —— Complete Backend (Phase 1-4)
+Student Marks Analyzer — Complete Backend (Phase 1-4)
 Includes all features: auth, ML, notifications, themes, bulk import, PostgreSQL-ready.
 """
 from fastapi import FastAPI, HTTPException, Query, Depends, UploadFile, File, Request, BackgroundTasks, WebSocket, WebSocketDisconnect
@@ -246,7 +246,7 @@ os.makedirs(os.path.join(os.path.dirname(__file__), "models"), exist_ok=True)
 # ============================================================
 app = FastAPI(
     title="Student Marks Analyzer API",
-    description="Complete API —— Phases 1-4 with ML, themes, preferences",
+    description="Complete API — Phases 1-4 with ML, themes, preferences",
     version="12.0.0",
 )
 
@@ -677,7 +677,7 @@ def init_database():
                     """, ("admin2", "admin2@example.com", backup_hash, "Backup Admin", "admin"))
                     conn.commit()
                     print("[OK] Default admins created")
-                print("[OK] PostgreSQL mode —— schema verified")
+                print("[OK] PostgreSQL mode — schema verified")
         except Exception as e:
             print(f"[WARN] PostgreSQL init check failed: {e}")
         return
