@@ -918,6 +918,24 @@ def _create_postgres_tables():
             used_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
+                    """CREATE TABLE IF NOT EXISTS achievements (
+                        id SERIAL PRIMARY KEY,
+                        code VARCHAR(50) UNIQUE NOT NULL,
+                        name VARCHAR(100) NOT NULL,
+                        description TEXT,
+                        icon VARCHAR(10) DEFAULT '🏅',
+                        rule_type VARCHAR(50) DEFAULT 'manual',
+                        rule_data TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS user_achievements (
+                        id SERIAL PRIMARY KEY,
+                        student_id INTEGER NOT NULL,
+                        achievement_code VARCHAR(50) NOT NULL,
+                        awarded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        awarded_by INTEGER,
+                        UNIQUE(student_id, achievement_code)
+                    )""",
                     """CREATE TABLE IF NOT EXISTS behavior_notes (
                         id SERIAL PRIMARY KEY,
                         student_id INTEGER NOT NULL,
@@ -1140,6 +1158,29 @@ def init_database():
                 visible_to_parents INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS achievements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                icon TEXT DEFAULT '🏅',
+                rule_type TEXT DEFAULT 'manual',
+                rule_data TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_achievements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_id INTEGER NOT NULL,
+                achievement_code TEXT NOT NULL,
+                awarded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                awarded_by INTEGER,
+                UNIQUE(student_id, achievement_code)
             )
         """)
 
@@ -3183,6 +3224,14 @@ def save_student(student: StudentRecord, background_tasks: BackgroundTasks,
             background_tasks.add_task(send_grade_notification_email,
                 student.name, student.grade, student.average, parent_emails)
 
+        # Award auto-badges (Feature 6)
+        try:
+            _awarded = _check_auto_badges(sid, student.marks, student.average, student.grade)
+            if _awarded:
+                print(f"[OK] Auto-awarded badges to student {sid}: {_awarded}")
+        except Exception as _e:
+            print(f"[WARN] Badge auto-award failed: {_e}")
+
         return {"message": "Saved", "id": sid}
     except Exception as e:
         raise HTTPException(500, f"Error: {str(e)}")
@@ -4423,6 +4472,203 @@ def delete_behavior_note(
             return {"message": "Note deleted"}
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+
+
+# ============================================================
+# ACHIEVEMENT BADGES (Feature 6)
+# ============================================================
+BUILTIN_ACHIEVEMENTS = [
+    {"code": "first_a_plus", "name": "First A+", "icon": "🥇",
+     "description": "Earned your first A+ grade", "rule_type": "auto"},
+    {"code": "perfect_attendance", "name": "Perfect Attendance", "icon": "🎯",
+     "description": "100% present in the last 30 days", "rule_type": "auto"},
+    {"code": "improvement_streak", "name": "Improvement Streak", "icon": "📈",
+     "description": "3 consecutive records with improving average", "rule_type": "auto"},
+    {"code": "top_of_class", "name": "Top of Class", "icon": "🏆",
+     "description": "Highest average in the class", "rule_type": "auto"},
+    {"code": "century", "name": "Century", "icon": "💯",
+     "description": "Total marks >= 100 in a single assessment", "rule_type": "auto"},
+    {"code": "consistency", "name": "Consistency", "icon": "🔥",
+     "description": "Low standard deviation (< 5) across subjects", "rule_type": "auto"},
+]
+
+
+def _seed_builtin_achievements():
+    """Insert built-in achievements if they don't exist."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            for a in BUILTIN_ACHIEVEMENTS:
+                if USE_POSTGRES:
+                    cursor.execute(_q("""
+                        INSERT INTO achievements (code, name, description, icon, rule_type, rule_data)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (code) DO NOTHING
+                    """), (a["code"], a["name"], a["description"], a["icon"], a["rule_type"], None))
+                else:
+                    cursor.execute(_q("""
+                        INSERT OR IGNORE INTO achievements (code, name, description, icon, rule_type, rule_data)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """), (a["code"], a["name"], a["description"], a["icon"], a["rule_type"], None))
+            conn.commit()
+    except Exception as e:
+        print(f"[WARN] Could not seed achievements: {e}")
+
+
+def _award_badge(student_id: int, code: str, awarded_by: Optional[int] = None):
+    """Award a badge if not already earned. Returns True if newly awarded."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            # Check if already earned
+            cursor.execute(_q("SELECT id FROM user_achievements WHERE student_id=? AND achievement_code=?"),
+                           (student_id, code))
+            if cursor.fetchone():
+                return False
+            # Ensure achievement exists
+            cursor.execute(_q("SELECT id FROM achievements WHERE code=?"), (code,))
+            if not cursor.fetchone():
+                return False
+            # Award
+            cursor.execute(_q("""
+                INSERT INTO user_achievements (student_id, achievement_code, awarded_by)
+                VALUES (?, ?, ?)
+            """), (student_id, code, awarded_by))
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"[WARN] Badge award failed: {e}")
+        return False
+
+
+def _check_auto_badges(student_id: int, marks, average: float, grade: str):
+    """Check and award auto badges based on the new record."""
+    awarded = []
+
+    # 1. First A+
+    if grade == "A+":
+        if _award_badge(student_id, "first_a_plus"):
+            awarded.append("first_a_plus")
+
+    # 2. Century (total marks >= 100)
+    if sum(marks) >= 100:
+        if _award_badge(student_id, "century"):
+            awarded.append("century")
+
+    # 3. Consistency (low std dev)
+    try:
+        import statistics
+        if len(marks) >= 3 and statistics.pstdev(marks) < 5:
+            if _award_badge(student_id, "consistency"):
+                awarded.append("consistency")
+    except Exception:
+        pass
+
+    # 4. Improvement streak (last 3 records improving)
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                SELECT average FROM performance_trends
+                WHERE student_id=? ORDER BY id DESC LIMIT 3
+            """), (student_id,))
+            rows = cursor.fetchall()
+            avgs = [r["average"] if isinstance(r, dict) else r[0] for r in rows]
+            if len(avgs) >= 3 and avgs[0] > avgs[1] > avgs[2]:
+                if _award_badge(student_id, "improvement_streak"):
+                    awarded.append("improvement_streak")
+    except Exception:
+        pass
+
+    return awarded
+
+
+class BadgeCreate(BaseModel):
+    code: str
+    name: str
+    description: Optional[str] = None
+    icon: Optional[str] = "🏅"
+
+
+class BadgeAward(BaseModel):
+    student_id: int
+    code: str
+
+
+@app.get("/badges/all")
+def list_all_badges(user=Depends(require_user)):
+    """List all achievement definitions."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM achievements ORDER BY rule_type ASC, name ASC")
+            return {"badges": [dict(r) for r in cursor.fetchall()]}
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+@app.get("/students/{student_id}/badges")
+def list_student_badges(student_id: int, user=Depends(require_user)):
+    """List badges earned by a student."""
+    if not _can_access_student(user, student_id):
+        raise HTTPException(403, "Access denied")
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                SELECT ua.id, ua.achievement_code, ua.awarded_at, ua.awarded_by,
+                       a.name, a.description, a.icon
+                FROM user_achievements ua
+                JOIN achievements a ON a.code = ua.achievement_code
+                WHERE ua.student_id = ?
+                ORDER BY ua.awarded_at DESC
+            """), (student_id,))
+            badges = []
+            for r in cursor.fetchall():
+                d = dict(r)
+                if d.get("awarded_at"):
+                    d["awarded_at"] = str(d["awarded_at"])[:19]
+                badges.append(d)
+            return {"count": len(badges), "badges": badges}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+@app.post("/badges/award")
+def award_badge_endpoint(data: BadgeAward, admin=Depends(require_admin)):
+    """Manually award a badge to a student."""
+    ok = _award_badge(data.student_id, data.code, awarded_by=admin["id"])
+    if ok:
+        return {"message": "Badge awarded"}
+    raise HTTPException(400, "Badge already earned or does not exist")
+
+
+@app.post("/badges/create")
+def create_custom_badge(data: BadgeCreate, admin=Depends(require_admin)):
+    """Create a custom achievement definition."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            code = data.code.strip().lower().replace(" ", "_")
+            if USE_POSTGRES:
+                cursor.execute(_q("""
+                    INSERT INTO achievements (code, name, description, icon, rule_type)
+                    VALUES (?, ?, ?, ?, 'manual')
+                    ON CONFLICT (code) DO NOTHING
+                """), (code, data.name, data.description, data.icon))
+            else:
+                cursor.execute(_q("""
+                    INSERT OR IGNORE INTO achievements (code, name, description, icon, rule_type)
+                    VALUES (?, ?, ?, ?, 'manual')
+                """), (code, data.name, data.description, data.icon))
+            conn.commit()
+            return {"message": "Badge created", "code": code}
     except Exception as e:
         raise HTTPException(500, f"Failed: {e}")
 
