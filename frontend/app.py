@@ -1519,7 +1519,7 @@ if selected == t("dashboard"):
                 st.markdown("### 📊 Grade Distribution")
                 gdf = pd.DataFrame({"Grade": list(stats["grade_distribution"].keys()),
                                     "Count": list(stats["grade_distribution"].values())})
-                st.plotly_chart(px.pie(gdf, values="Count", names="Grade", hole=0.4),
+                st.plotly_chart(style_chart(px.pie(gdf, values="Count", names="Grade", hole=0.4)),
                               use_container_width=True)
         with c2:
             if stats.get("top_performers"):
@@ -1798,18 +1798,18 @@ elif selected == t("analytics"):
             if data.get("grade_distribution"):
                 gdf = pd.DataFrame({"Grade": list(data["grade_distribution"].keys()),
                                     "Count": list(data["grade_distribution"].values())})
-                st.plotly_chart(px.pie(gdf, values="Count", names="Grade", hole=0.4),
+                st.plotly_chart(style_chart(px.pie(gdf, values="Count", names="Grade", hole=0.4)),
                               use_container_width=True)
         with c2:
             if data.get("grade_ranges"):
                 rdf = pd.DataFrame({"Range": list(data["grade_ranges"].keys()),
                                     "Count": list(data["grade_ranges"].values())})
-                st.plotly_chart(px.bar(rdf, x="Range", y="Count", color="Count",
-                                       color_continuous_scale="Viridis"), use_container_width=True)
+                st.plotly_chart(style_chart(px.bar(rdf, x="Range", y="Count", color="Count",
+                                       color_continuous_scale="Viridis")), use_container_width=True)
         if data.get("subject_analytics"):
             subj_df = pd.DataFrame(data["subject_analytics"])
-            st.plotly_chart(px.bar(subj_df, x="subject", y="average", color="average",
-                                   color_continuous_scale="RdYlGn"), use_container_width=True)
+            st.plotly_chart(style_chart(px.bar(subj_df, x="subject", y="average", color="average",
+                                   color_continuous_scale="RdYlGn")), use_container_width=True)
         if data.get("top_performers"):
             st.markdown("### 🏆 Top Performers")
             st.dataframe(pd.DataFrame(data["top_performers"]), use_container_width=True)
@@ -2273,7 +2273,7 @@ elif selected == t("classes"):
                     if res.get("grade_distribution"):
                         gdf = pd.DataFrame({"Grade": list(res["grade_distribution"].keys()),
                                             "Count": list(res["grade_distribution"].values())})
-                        st.plotly_chart(px.pie(gdf, values="Count", names="Grade", hole=0.4),
+                        st.plotly_chart(style_chart(px.pie(gdf, values="Count", names="Grade", hole=0.4)),
                                       use_container_width=True)
 
                     if res.get("at_risk"):
