@@ -4289,6 +4289,129 @@ def attendance_overall(user=Depends(require_user)):
         }
 
 
+
+
+# ============================================================
+# ATTENDANCE TRENDS (feature: attendance chart over time)
+# ============================================================
+@app.get("/attendance/trends")
+def attendance_trends(
+    days: int = Query(30, ge=1, le=365),
+    class_name: Optional[str] = None,
+    user=Depends(require_user),
+):
+    """Return daily attendance rate for the last N days.
+
+    Scoped by role:
+      - admin/teacher: all students (optionally filtered by class)
+      - parent: only their children
+      - student: only themselves
+    """
+    from datetime import datetime, timedelta
+
+    end_date = datetime.utcnow().date()
+    start_date = end_date - timedelta(days=days - 1)
+    start_str = start_date.isoformat()
+
+    # Determine which students the user can see
+    accessible = get_accessible_students(user)
+    student_ids = [s["id"] for s in accessible]
+
+    if class_name:
+        # Narrow to a single class
+        student_ids = [
+            s["id"] for s in accessible
+            if s.get("class_name") == class_name
+        ]
+
+    if not student_ids:
+        return {
+            "days": days,
+            "start_date": start_str,
+            "end_date": end_date.isoformat(),
+            "trends": [],
+            "summary": {
+                "total_days": 0, "avg_rate": 0,
+                "best_day": None, "worst_day": None,
+            },
+        }
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            # Build a placeholder string for the IN clause
+            ph = ",".join("?" * len(student_ids))
+
+            cursor.execute(_q(f"""
+                SELECT date, status, COUNT(*) as count
+                FROM attendance
+                WHERE student_id IN ({ph}) AND date >= ?
+                GROUP BY date, status
+                ORDER BY date ASC
+            """), student_ids + [start_str])
+
+            rows = cursor.fetchall()
+    except Exception as e:
+        raise HTTPException(500, f"Failed to fetch trends: {e}")
+
+    # Aggregate by date
+    by_date = {}
+    for r in rows:
+        d = r["date"] if isinstance(r, dict) else r[0]
+        status = (r["status"] if isinstance(r, dict) else r[1]) or ""
+        count = r["count"] if isinstance(r, dict) else r[2]
+        by_date.setdefault(d, {"present": 0, "absent": 0, "late": 0, "excused": 0})
+        key = status.lower()
+        if key in by_date[d]:
+            by_date[d][key] += count
+        else:
+            # Unknown status: treat as present (defensive)
+            by_date[d]["present"] += count
+
+    trends = []
+    for d in sorted(by_date.keys()):
+        c = by_date[d]
+        total = c["present"] + c["absent"] + c["late"] + c["excused"]
+        if total == 0:
+            continue
+        # Rate formula: present + 0.5 * (late + excused)
+        rate = (c["present"] + 0.5 * (c["late"] + c["excused"])) / total * 100
+        trends.append({
+            "date": d,
+            "present": c["present"],
+            "absent": c["absent"],
+            "late": c["late"],
+            "excused": c["excused"],
+            "total": total,
+            "rate": round(rate, 2),
+        })
+
+    if trends:
+        rates = [t["rate"] for t in trends]
+        avg_rate = round(sum(rates) / len(rates), 2)
+        best_day = max(trends, key=lambda x: x["rate"])
+        worst_day = min(trends, key=lambda x: x["rate"])
+        summary = {
+            "total_days": len(trends),
+            "avg_rate": avg_rate,
+            "best_day": {"date": best_day["date"], "rate": best_day["rate"]},
+            "worst_day": {"date": worst_day["date"], "rate": worst_day["rate"]},
+        }
+    else:
+        summary = {
+            "total_days": 0, "avg_rate": 0,
+            "best_day": None, "worst_day": None,
+        }
+
+    return {
+        "days": days,
+        "start_date": start_str,
+        "end_date": end_date.isoformat(),
+        "trends": trends,
+        "summary": summary,
+    }
+
 @app.get("/attendance/{student_id}/stats")
 def attendance_stats(student_id: int, user=Depends(require_user)):
     if not any(s["id"] == student_id for s in get_accessible_students(user)):
