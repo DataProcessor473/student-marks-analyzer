@@ -3670,15 +3670,54 @@ def delete_timetable_entry(entry_id: int, user=Depends(require_role("admin", "te
 # ============================================================
 @app.post("/assignments/create")
 def create_assignment(data: AssignmentCreate, user=Depends(require_role("admin", "teacher"))):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(_q("""INSERT INTO assignments (title, description, class_name, subject,
-                                    due_date, total_marks, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?)"""),
-            (data.title, data.description, data.class_name, data.subject,
-             data.due_date, data.total_marks, user["id"]))
-        conn.commit()
-    return {"message": "Assignment created"}
+    from datetime import datetime as _dt, timedelta as _td
+    recurrence = getattr(data, "recurrence", "none") or "none"
+    recurrence_end = getattr(data, "recurrence_end", None)
+    created_ids = []
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""INSERT INTO assignments (title, description, class_name, subject,
+                                        due_date, total_marks, created_by, recurrence, recurrence_end)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"""),
+                (data.title, data.description, data.class_name, data.subject,
+                 data.due_date, data.total_marks, user["id"], recurrence, recurrence_end))
+            if USE_POSTGRES:
+                cursor.execute(_q("SELECT id FROM assignments ORDER BY id DESC LIMIT 1"))
+                parent_id = cursor.fetchone()["id"]
+            else:
+                parent_id = cursor.lastrowid
+            created_ids.append(parent_id)
+            if recurrence in ("weekly", "monthly") and recurrence_end:
+                try:
+                    start_date = _dt.fromisoformat(data.due_date)
+                    end_date = _dt.fromisoformat(recurrence_end)
+                except ValueError:
+                    conn.commit()
+                    return {"message": "Assignment created (recurrence skipped)", "id": parent_id, "generated": 1}
+                step_days = 7 if recurrence == "weekly" else 30
+                current = start_date + _td(days=step_days)
+                count = 1
+                while current <= end_date and count < 52:
+                    cursor.execute(_q("""INSERT INTO assignments (title, description, class_name, subject,
+                                                due_date, total_marks, created_by, recurrence, recurrence_end, parent_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""),
+                        (data.title, data.description, data.class_name, data.subject,
+                         current.date().isoformat(), data.total_marks, user["id"],
+                         recurrence, recurrence_end, parent_id))
+                    if USE_POSTGRES:
+                        cursor.execute(_q("SELECT id FROM assignments ORDER BY id DESC LIMIT 1"))
+                        child_id = cursor.fetchone()["id"]
+                    else:
+                        child_id = cursor.lastrowid
+                    created_ids.append(child_id)
+                    count += 1
+                    current = current + _td(days=step_days)
+            conn.commit()
+            return {"message": "Created " + str(len(created_ids)) + " assignment(s)",
+                    "parent_id": parent_id, "generated": len(created_ids)}
+    except Exception as e:
+        raise HTTPException(500, "Failed: " + str(e))
 
 
 @app.get("/assignments")
