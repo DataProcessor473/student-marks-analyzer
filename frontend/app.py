@@ -1616,9 +1616,15 @@ with st.sidebar:
             "journal-check", "cash-coin", "bell", "broadcast", "gear",
         ]
 
+    # Restore previously-selected page from URL if present
+    _url_page = st.query_params.get("p")
+    _default_idx = 0
+    if _url_page and _url_page in menu_options:
+        _default_idx = menu_options.index(_url_page)
+
     selected = option_menu(
         menu_title=None, options=menu_options, icons=menu_icons,
-        menu_icon="cast", default_index=0,
+        menu_icon="cast", default_index=_default_idx,
         styles={
             "container": {"padding": "0!important", "background-color": "transparent"},
             "icon": {"color": "#6366f1", "font-size": "0.95rem"},
@@ -1631,6 +1637,13 @@ with st.sidebar:
                                   "border-left": "3px solid #6366f1"},
         }
     )
+
+    # Save current page to URL for persistence across refreshes
+    try:
+        if selected:
+            st.query_params["p"] = selected
+    except Exception:
+        pass
 
     st.markdown("---")
     st.caption(f"🔗 `{API_URL}`")
