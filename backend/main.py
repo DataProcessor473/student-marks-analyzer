@@ -108,6 +108,8 @@ except Exception as _e:
         subject: Optional[str] = None
         due_date: str
         total_marks: int = 100
+        recurrence: Optional[str] = "none"
+        recurrence_end: Optional[str] = None
 
     class SubmissionUpdate(_Fallback):
         status: Optional[str] = None
