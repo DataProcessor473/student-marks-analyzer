@@ -1908,26 +1908,19 @@ elif selected == t("attendance") or selected == "📅 My Attendance":
                 with c2: st.metric("Present", data["present"])
                 with c3: st.metric("Absent", data["absent"])
                 with c4: st.metric("Rate", f"{data['overall_rate']:.1f}%")
-    else:
-        st.info("Your attendance summary")
 
         with tab4:
             st.markdown("### 📈 Attendance Trends")
             st.caption("Daily attendance rate over time")
 
-            c1, c2 = st.columns([1, 3])
-            with c1:
-                days_choice = st.selectbox(
-                    "Time range",
-                    options=[7, 30, 90, 180],
-                    index=1,
-                    format_func=lambda x: f"Last {x} days",
-                    key="att_trend_days",
-                )
-            with c2:
-                st.markdown("&nbsp;", unsafe_allow_html=True)
+            days_choice = st.selectbox(
+                "Time range",
+                options=[7, 30, 90, 180],
+                index=1,
+                format_func=lambda x: f"Last {x} days",
+                key="att_trend_days",
+            )
 
-            # Fetch trends
             try:
                 trend_resp = api_get(f"/attendance/trends?days={days_choice}")
                 trend_data = handle_response(trend_resp, show_error=False) if trend_resp else None
@@ -1944,7 +1937,6 @@ elif selected == t("attendance") or selected == "📅 My Attendance":
                 trends = trend_data["trends"]
                 summary = trend_data.get("summary", {})
 
-                # Summary cards
                 m1, m2, m3 = st.columns(3)
                 with m1:
                     avg = summary.get("avg_rate", 0)
@@ -1966,7 +1958,7 @@ elif selected == t("attendance") or selected == "📅 My Attendance":
                         <div class="metric-card">
                             <div class="metric-icon">🏆</div>
                             <div class="metric-value" style="color:#10b981;">{best.get('rate', 0):.1f}%</div>
-                            <div class="metric-label">Best Day ({best.get('date', '—')})</div>
+                            <div class="metric-label">Best Day</div>
                         </div>
                         """,
                         unsafe_allow_html=True,
@@ -1978,7 +1970,7 @@ elif selected == t("attendance") or selected == "📅 My Attendance":
                         <div class="metric-card">
                             <div class="metric-icon">⚠️</div>
                             <div class="metric-value" style="color:#ef4444;">{worst.get('rate', 0):.1f}%</div>
-                            <div class="metric-label">Worst Day ({worst.get('date', '—')})</div>
+                            <div class="metric-label">Worst Day</div>
                         </div>
                         """,
                         unsafe_allow_html=True,
@@ -1986,55 +1978,38 @@ elif selected == t("attendance") or selected == "📅 My Attendance":
 
                 st.markdown("---")
 
-                # Line chart
                 import plotly.graph_objects as _go
                 import pandas as _pd
 
                 tdf = _pd.DataFrame(trends)
                 tdf["date"] = _pd.to_datetime(tdf["date"])
-
                 colors = get_chart_colors()
 
                 fig = _go.Figure()
                 fig.add_trace(_go.Scatter(
-                    x=tdf["date"],
-                    y=tdf["rate"],
-                    mode="lines+markers",
+                    x=tdf["date"], y=tdf["rate"], mode="lines+markers",
                     name="Attendance Rate",
                     line=dict(color=colors["primary"], width=3),
                     marker=dict(size=8, color=colors["primary"]),
                     fill="tozeroy",
-                    fillcolor=f"rgba(99,102,241,0.15)",
+                    fillcolor="rgba(99,102,241,0.15)",
                 ))
-                # 80% reference line
-                fig.add_hline(
-                    y=80,
-                    line=dict(color=colors["success"], width=1, dash="dash"),
-                    annotation_text="Target (80%)",
-                    annotation_position="top left",
-                )
+                fig.add_hline(y=80, line=dict(color=colors["success"], width=1, dash="dash"),
+                              annotation_text="Target (80%)", annotation_position="top left")
                 fig.update_yaxes(range=[0, 105], title="Attendance Rate (%)")
                 fig.update_xaxes(title="Date")
-                fig.update_layout(
-                    height=400,
-                    showlegend=False,
-                    title=f"Attendance Rate (Last {days_choice} Days)",
-                )
+                fig.update_layout(height=400, showlegend=False,
+                                  title=f"Attendance Rate (Last {days_choice} Days)")
                 st.plotly_chart(style_chart(fig), use_container_width=True)
 
-                # Data table
                 with st.expander("📋 View daily data"):
-                    display_df = tdf.copy()
-                    display_df["date"] = display_df["date"].dt.strftime("%Y-%m-%d")
-                    display_df["rate"] = display_df["rate"].apply(lambda x: f"{x:.1f}%")
-                    st.dataframe(
-                        display_df[["date", "present", "absent", "late", "excused", "total", "rate"]],
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
-
-
+                    disp = tdf.copy()
+                    disp["date"] = disp["date"].dt.strftime("%Y-%m-%d")
+                    disp["rate"] = disp["rate"].apply(lambda x: f"{x:.1f}%")
+                    st.dataframe(disp[["date", "present", "absent", "late", "excused", "total", "rate"]],
+                                 use_container_width=True, hide_index=True)
+    else:
+        st.info("Your attendance summary")
 
 # ============================================================
 # PAGE: EXAMS
