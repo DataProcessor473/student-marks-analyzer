@@ -1605,7 +1605,7 @@ elif selected == t("analyze"):
                              marker_color=["#10b981" if m >= passing else "#ef4444" for m in df["marks"]],
                              text=df["marks"], textposition="outside"))
         fig.update_layout(yaxis_range=[0, 105], showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(style_chart(fig), use_container_width=True)
 
         st.markdown("### 💡 Recommendations")
         for rec in res["recommendations"]:
@@ -2564,7 +2564,7 @@ elif selected == t("profile"):
                              color_continuous_scale="RdYlGn", text="Marks")
                 fig.update_traces(texttemplate="%{text:.0f}", textposition="outside")
                 fig.update_layout(yaxis_range=[0, 105], showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(style_chart(fig), use_container_width=True)
 
             # Attendance summary
             st.markdown("### 📅 Attendance Summary")
@@ -2601,7 +2601,7 @@ elif selected == t("profile"):
                     )
                     fig.update_yaxes(showticklabels=False)
                     fig.update_layout(height=150, showlegend=True)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(style_chart(fig), use_container_width=True)
                 else:
                     st.info("No attendance data for heatmap")
             else:
@@ -2614,7 +2614,7 @@ elif selected == t("profile"):
                 if "created_at" in tdf.columns and "average" in tdf.columns:
                     tdf["created_at"] = pd.to_datetime(tdf["created_at"])
                     fig = px.line(tdf, x="created_at", y="average", markers=True)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(style_chart(fig), use_container_width=True)
 
             # Parents
             if prof.get("parents"):
