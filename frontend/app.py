@@ -2026,6 +2026,81 @@ elif selected == t("reports"):
 
 
 # ============================================================
+    # EXAM RESULTS BULK IMPORT (Feature 14)
+    # ============================================================
+    st.markdown("---")
+    st.markdown("### Exam Results Bulk Import")
+    st.caption("Upload CSV of exam marks. Grades auto-computed on commit.")
+
+    if user_role not in ("admin", "teacher"):
+        st.info("Only admins and teachers can import exam results.")
+    else:
+        with st.expander("Import Exam Results from CSV", expanded=False):
+            _tpl_c1, _tpl_c2 = st.columns([3, 1])
+            with _tpl_c2:
+                if st.button("Template", use_container_width=True, key="exam_tpl_btn"):
+                    _tr = api_get("/exam-results/template")
+                    if _tr and _tr.status_code == 200:
+                        st.download_button("Save Template", data=_tr.content,
+                                          file_name="exam_results_template.csv",
+                                          mime="text/csv", key="exam_tpl_save")
+
+            _up = st.file_uploader("Upload CSV", type=["csv"], key="exam_csv_upload")
+            _csv_text = None
+            if _up:
+                try:
+                    _csv_text = _up.read().decode("utf-8")
+                    st.success("Loaded: " + _up.name)
+                except Exception as _e:
+                    st.error("Read failed: " + str(_e))
+
+            _pasted = st.text_area(
+                "Or paste CSV:",
+                height=120,
+                placeholder="student_name,subject,exam_name,marks,total_marks",
+                key="exam_csv_paste",
+            )
+            if _pasted and not _csv_text:
+                _csv_text = _pasted
+
+            if _csv_text:
+                if st.button("Preview", type="primary", key="exam_prev_btn"):
+                    _pr = api_post("/exam-results/preview", json={"csv_text": _csv_text})
+                    _prd = handle_response(_pr, show_error=False) if _pr else None
+                    if _prd:
+                        st.session_state["exam_import_preview"] = _prd
+
+                _preview = st.session_state.get("exam_import_preview")
+                if _preview:
+                    _m1, _m2, _m3 = st.columns(3)
+                    with _m1: st.metric("Valid", _preview.get("valid_rows", 0))
+                    with _m2: st.metric("Errors", _preview.get("error_count", 0))
+                    with _m3: st.metric("Total", _preview.get("total", 0))
+
+                    if _preview.get("error_count", 0) > 0:
+                        with st.expander("Show errors"):
+                            import pandas as _pd
+                            st.dataframe(_pd.DataFrame(_preview.get("errors", [])), use_container_width=True)
+
+                    if _preview.get("valid_rows", 0) > 0:
+                        import pandas as _pd2
+                        st.dataframe(_pd2.DataFrame(_preview.get("preview", [])),
+                                    use_container_width=True, hide_index=True)
+
+                        if st.button("Import " + str(_preview.get("valid_rows", 0)) + " rows",
+                                    type="primary", key="exam_commit_btn"):
+                            _cr = api_post("/exam-results/commit",
+                                          json={"rows": _preview.get("preview", [])})
+                            _crd = handle_response(_cr, show_error=False) if _cr else None
+                            if _crd:
+                                st.success("Imported " + str(_crd.get("imported", 0)) + " rows!")
+                                st.balloons()
+                                st.session_state.pop("exam_import_preview", None)
+                                time.sleep(1.5)
+                                st.rerun()
+
+
+# ============================================================
 # PAGE: ATTENDANCE
 # ============================================================
 elif selected == t("attendance") or selected == "📅 My Attendance":
