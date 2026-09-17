@@ -1,5 +1,5 @@
 """
-Student Marks Analyzer â€” Complete Backend (Phase 1-4)
+Student Marks Analyzer Ã¢â‚¬â€ Complete Backend (Phase 1-4)
 Includes all features: auth, ML, notifications, themes, bulk import, PostgreSQL-ready.
 """
 from fastapi import FastAPI, HTTPException, Query, Depends, UploadFile, File, Request, BackgroundTasks, WebSocket, WebSocketDisconnect
@@ -57,8 +57,17 @@ except ImportError:
     generate_minimal_report = None
     print("WARNING: pdf_templates.py not found")
 
-except ImportError:
-    print("WARNING: models_phase3.py not found - using fallback models")
+try:
+    from models_phase3 import (
+        StudentProfileUpdate, ExamCreate, TimetableCreate,
+        AssignmentCreate, SubmissionUpdate,
+        FeeStructureCreate, FeePaymentCreate,
+        SavedFilterCreate, ScheduledReportCreate,
+        WhatsAppOTPRequest, BackupRestoreRequest
+    )
+except Exception as _e:
+    print(f"WARNING: models_phase3 import failed: {type(_e).__name__}: {_e}")
+    print("Using fallback models...")
 
     class _Fallback(BaseModel):
         class Config:
@@ -237,7 +246,7 @@ os.makedirs(os.path.join(os.path.dirname(__file__), "models"), exist_ok=True)
 # ============================================================
 app = FastAPI(
     title="Student Marks Analyzer API",
-    description="Complete API â€” Phases 1-4 with ML, themes, preferences",
+    description="Complete API Ã¢â‚¬â€ Phases 1-4 with ML, themes, preferences",
     version="12.0.0",
 )
 
@@ -668,7 +677,7 @@ def init_database():
                     """, ("admin2", "admin2@example.com", backup_hash, "Backup Admin", "admin"))
                     conn.commit()
                     print("[OK] Default admins created")
-                print("[OK] PostgreSQL mode â€” schema verified")
+                print("[OK] PostgreSQL mode Ã¢â‚¬â€ schema verified")
         except Exception as e:
             print(f"[WARN] PostgreSQL init check failed: {e}")
         return
@@ -1496,19 +1505,19 @@ def detect_anomalies(marks):
 def generate_recommendations(marks, avg):
     recs = []
     if avg < 40:
-        recs += ["ðŸš¨ Urgent: Consider additional tutoring", "ðŸ“š Focus on foundational concepts"]
+        recs += ["Ã°Å¸Å¡Â¨ Urgent: Consider additional tutoring", "Ã°Å¸â€œÅ¡ Focus on foundational concepts"]
     elif avg < 60:
-        recs += ["ðŸ“ˆ Need improvement: Study groups recommended", "ðŸ“… Create structured schedule"]
+        recs += ["Ã°Å¸â€œË† Need improvement: Study groups recommended", "Ã°Å¸â€œâ€¦ Create structured schedule"]
     elif avg < 75:
-        recs += ["ðŸ’¡ Good performance: Focus on weak areas", "ðŸŽ¯ Set higher targets"]
+        recs += ["Ã°Å¸â€™Â¡ Good performance: Focus on weak areas", "Ã°Å¸Å½Â¯ Set higher targets"]
     else:
-        recs += ["ðŸŒŸ Excellent! Help peers", "ðŸ† Aim for top performance"]
+        recs += ["Ã°Å¸Å’Å¸ Excellent! Help peers", "Ã°Å¸Ââ€  Aim for top performance"]
     weak = [i for i, m in enumerate(marks) if m < 40]
     if weak:
-        recs.append(f"âš ï¸ Focus on subjects {', '.join(str(i+1) for i in weak)}")
+        recs.append(f"Ã¢Å¡Â Ã¯Â¸Â Focus on subjects {', '.join(str(i+1) for i in weak)}")
     strong = [i for i, m in enumerate(marks) if m >= 80]
     if strong:
-        recs.append(f"âœ… Strong in subjects {', '.join(str(i+1) for i in strong)}")
+        recs.append(f"Ã¢Å“â€¦ Strong in subjects {', '.join(str(i+1) for i in strong)}")
     return recs
 
 
