@@ -57,16 +57,89 @@ except ImportError:
     generate_minimal_report = None
     print("WARNING: pdf_templates.py not found")
 
-try:
-    from models_phase3 import (
-        StudentProfileUpdate, ExamCreate, TimetableCreate,
-        AssignmentCreate, SubmissionUpdate,
-        FeeStructureCreate, FeePaymentCreate,
-        SavedFilterCreate, ScheduledReportCreate,
-        WhatsAppOTPRequest, BackupRestoreRequest
-    )
 except ImportError:
-    print("WARNING: models_phase3.py not found")
+    print("WARNING: models_phase3.py not found - using fallback models")
+
+    class _Fallback(BaseModel):
+        class Config:
+            extra = "allow"
+
+    class StudentProfileUpdate(_Fallback):
+        email: Optional[str] = None
+        phone: Optional[str] = None
+        date_of_birth: Optional[str] = None
+        address: Optional[str] = None
+
+    class ExamCreate(_Fallback):
+        name: str
+        class_name: Optional[str] = None
+        subject: Optional[str] = None
+        exam_date: str
+        start_time: Optional[str] = None
+        end_time: Optional[str] = None
+        total_marks: int = 100
+        room: Optional[str] = None
+        notes: Optional[str] = None
+
+    class TimetableCreate(_Fallback):
+        class_name: str
+        day_of_week: str
+        period: int
+        subject: str
+        teacher_name: Optional[str] = None
+        room: Optional[str] = None
+        start_time: Optional[str] = None
+        end_time: Optional[str] = None
+
+    class AssignmentCreate(_Fallback):
+        title: str
+        description: Optional[str] = None
+        class_name: Optional[str] = None
+        subject: Optional[str] = None
+        due_date: str
+        total_marks: int = 100
+
+    class SubmissionUpdate(_Fallback):
+        status: Optional[str] = None
+        marks_obtained: Optional[float] = None
+        feedback: Optional[str] = None
+
+    class FeeStructureCreate(_Fallback):
+        class_name: str
+        fee_type: str
+        amount: float
+        frequency: str = "monthly"
+        academic_year: Optional[str] = None
+
+    class FeePaymentCreate(_Fallback):
+        student_id: int
+        fee_type: str
+        amount: float
+        payment_date: str
+        payment_method: str = "cash"
+        transaction_id: Optional[str] = None
+        status: str = "paid"
+        due_date: Optional[str] = None
+        notes: Optional[str] = None
+
+    class SavedFilterCreate(_Fallback):
+        name: str
+        entity: str
+        filter_json: str
+        is_shared: bool = False
+
+    class ScheduledReportCreate(_Fallback):
+        report_type: str
+        recipients: str
+        schedule: str = "weekly"
+        enabled: bool = True
+
+    class WhatsAppOTPRequest(_Fallback):
+        phone: str
+        purpose: str = "verification"
+
+    class BackupRestoreRequest(_Fallback):
+        backup_filename: str
 
 try:
     from twilio.rest import Client as TwilioClient
@@ -3264,7 +3337,7 @@ def list_auto_backups(user=Depends(require_admin)):
 # FEATURE 3: SCHEDULED REPORTS
 # ============================================================
 @app.post("/reports/schedule")
-def create_scheduled_report(data: ScheduledReportCreate, user=Depends(require_admin)):
+def (data: ScheduledReportCreate, user=Depends(require_admin)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
 
