@@ -1529,6 +1529,57 @@ if selected == t("dashboard"):
                 for i, s in enumerate(stats["top_performers"][:5], 1):
                     medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "  "
                     st.markdown(f"{medal} **{s['name']}** — {s['average']:.1f}% ({s['grade']})")
+
+
+    # ============================================================
+    # RECENT ACHIEVEMENTS (Feature 6)
+    # ============================================================
+    st.markdown("---")
+    st.markdown("### 🏅 Recent Achievements")
+
+    try:
+        _recent_resp = api_get("/students", params={"limit": 500})
+        _recent_data = handle_response(_recent_resp, show_error=False) if _recent_resp else None
+        _recent_students = _recent_data.get("students", []) if _recent_data else []
+
+        _all_recent = []
+        for _s in _recent_students[:20]:
+            _br = api_get(f"/students/{_s['id']}/badges")
+            _bd = handle_response(_br, show_error=False) if _br else None
+            for _b in (_bd.get("badges", []) if _bd else []):
+                _b["student_name"] = _s["name"]
+                _all_recent.append(_b)
+
+        _all_recent.sort(key=lambda x: x.get("awarded_at", ""), reverse=True)
+        _top5 = _all_recent[:5]
+
+        if not _top5:
+            st.info("No achievements awarded yet.")
+        else:
+            for _r in _top5:
+                st.markdown(
+                    f"""
+                    <div style="display:flex;align-items:center;gap:1rem;
+                                background:rgba(99,102,241,0.08);
+                                border-left:4px solid #6366f1;
+                                padding:0.75rem 1rem;border-radius:8px;margin:0.4rem 0;">
+                        <div style="font-size:1.8rem;">{_r.get('icon','🏅')}</div>
+                        <div>
+                            <b>{_r.get('name','')}</b>
+                            <span style="color:#6b7280;font-size:0.85rem;">
+                                — awarded to {_r.get('student_name','')}
+                            </span>
+                            <div style="font-size:0.75rem;color:#9ca3af;">
+                                {_r.get('awarded_at','')[:16]}
+                            </div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+    except Exception as _e:
+        st.caption(f"Could not load recent achievements: {_e}")
+
     else:
         st.info(f"👋 {t('welcome')}! Get started by adding students.")
 
@@ -2985,6 +3036,67 @@ elif selected == t("profile"):
                                         _err = "Unknown error"
                                     st.error(f"❌ {_err}")
 
+
+
+
+            # ============================================================
+            # ACHIEVEMENT BADGES (Feature 6)
+            # ============================================================
+            st.markdown("---")
+            st.markdown("### 🏅 Achievement Badges")
+
+            _bdg_resp = api_get(f"/students/{sid}/badges")
+            _bdg_data = handle_response(_bdg_resp, show_error=False) if _bdg_resp else None
+            _earned = _bdg_data.get("badges", []) if _bdg_data else []
+
+            if not _earned:
+                st.info("No badges earned yet. Keep up the good work!")
+            else:
+                _earned_cols = st.columns(min(len(_earned), 6))
+                for _idx, _b in enumerate(_earned[:6]):
+                    with _earned_cols[_idx]:
+                        st.markdown(
+                            f"""
+                            <div style="background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                        border-radius:14px;padding:1rem;text-align:center;
+                                        color:white;box-shadow:0 4px 12px rgba(99,102,241,0.2);
+                                        height:120px;">
+                                <div style="font-size:2.2rem;line-height:1;">{_b.get('icon','🏅')}</div>
+                                <div style="font-weight:600;font-size:0.85rem;margin-top:0.4rem;">{_b.get('name','')}</div>
+                                <div style="font-size:0.7rem;opacity:0.8;margin-top:0.2rem;">{_b.get('awarded_at','')[:10]}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+
+            # Admin: award badge tool
+            if user_role == "admin":
+                with st.expander("➕ Award a badge"):
+                    _all_bdg_resp = api_get("/badges/all")
+                    _all_bdg_data = handle_response(_all_bdg_resp, show_error=False) if _all_bdg_resp else None
+                    _all_badges = _all_bdg_data.get("badges", []) if _all_bdg_data else []
+                    if _all_badges:
+                        _earned_codes = {b.get("achievement_code") for b in _earned}
+                        _available = [b for b in _all_badges if b["code"] not in _earned_codes]
+                        if not _available:
+                            st.success("Student has earned all available badges!")
+                        else:
+                            _opts = {f"{b.get('icon','🏅')} {b['name']}": b["code"] for b in _available}
+                            _sel = st.selectbox("Select badge", options=list(_opts.keys()), key=f"award_{sid}")
+                            if st.button("🏅 Award Badge", type="primary", key=f"award_btn_{sid}"):
+                                _resp = api_post("/badges/award", json={"student_id": sid, "code": _opts[_sel]})
+                                if _resp and _resp.status_code == 200:
+                                    st.success("Badge awarded!")
+                                    st.balloons()
+                                    st.rerun()
+                                else:
+                                    try:
+                                        _err = _resp.json().get("detail", "Failed")
+                                    except Exception:
+                                        _err = "Unknown error"
+                                    st.error(f"Failed: {_err}")
+                    else:
+                        st.info("No badge definitions available.")
 
             # Parents
             if prof.get("parents"):
