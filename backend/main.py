@@ -16,6 +16,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 import bcrypt
 import numpy as np
 import sqlite3
@@ -918,6 +919,14 @@ def _create_postgres_tables():
             used_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
+                    """CREATE TABLE IF NOT EXISTS fee_reminders (
+                        id SERIAL PRIMARY KEY,
+                        payment_id INTEGER NOT NULL,
+                        sent_to TEXT,
+                        status VARCHAR(20) DEFAULT 'sent',
+                        error TEXT,
+                        sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )""",
                     """CREATE TABLE IF NOT EXISTS grade_schemes (
                         id SERIAL PRIMARY KEY,
                         name VARCHAR(100) UNIQUE NOT NULL,
@@ -1221,6 +1230,17 @@ def init_database():
                 class_name TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, class_name)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS fee_reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                payment_id INTEGER NOT NULL,
+                sent_to TEXT,
+                status TEXT DEFAULT 'sent',
+                error TEXT,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -5172,6 +5192,199 @@ def get_bulk_invoices(data: BulkInvoiceRequest, user=Depends(require_role("admin
         raise HTTPException(500, f"Failed: {e}")
 
 
+
+
+# ============================================================
+# FEE REMINDERS (Feature 15)
+# ============================================================
+def send_fee_reminders(days_ahead: int = 2, run_now_override: bool = False):
+    """Send reminder emails for pending fee payments due within N days.
+
+    Skips payments that already received a reminder in the last 20 hours.
+    Returns a summary dict {sent, skipped, failed, total}.
+    """
+    summary = {"sent": 0, "skipped": 0, "failed": 0, "total": 0}
+
+    try:
+        from datetime import datetime as _dt, timedelta as _td
+        now = _dt.now()
+        cutoff = (now + _td(days=days_ahead)).date().isoformat()
+        today = now.date().isoformat()
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            # Find pending payments due within the window (or already overdue)
+            cursor.execute(_q("""
+                SELECT fp.id, fp.student_id, fp.fee_type, fp.amount,
+                       fp.due_date, fp.status, s.name AS student_name,
+                       s.class_name, s.email AS student_email
+                FROM fee_payments fp
+                JOIN students s ON fp.student_id = s.id
+                WHERE fp.status = 'pending'
+                  AND fp.due_date IS NOT NULL
+                  AND fp.due_date <= ?
+                ORDER BY fp.due_date ASC
+            """), (cutoff,))
+            rows = cursor.fetchall()
+            payments = [dict(r) for r in rows]
+            summary["total"] = len(payments)
+
+            for p in payments:
+                payment_id = p["id"]
+
+                # Skip if a reminder was already sent in the last 20 hours
+                cursor.execute(_q("""
+                    SELECT sent_at FROM fee_reminders
+                    WHERE payment_id = ? AND status = 'sent'
+                    ORDER BY sent_at DESC LIMIT 1
+                """), (payment_id,))
+                last = cursor.fetchone()
+                if last:
+                    last_dt = last["sent_at"] if isinstance(last, dict) else last[0]
+                    try:
+                        from datetime import datetime as _d2
+                        if isinstance(last_dt, str):
+                            last_dt = _d2.fromisoformat(last_dt.replace("Z", ""))
+                        if (now - last_dt) < _td(hours=20):
+                            summary["skipped"] += 1
+                            continue
+                    except Exception:
+                        pass
+
+                # Get parent emails for the student
+                cursor.execute(_q("""
+                    SELECT u.email FROM users u
+                    JOIN parent_children pc ON u.id = pc.parent_user_id
+                    WHERE pc.student_id = ? AND u.is_active = 1 AND u.email IS NOT NULL
+                """), (p["student_id"],))
+                emails = [r["email"] if isinstance(r, dict) else r[0] for r in cursor.fetchall()]
+                if not emails:
+                    summary["skipped"] += 1
+                    # Log as skipped
+                    cursor.execute(_q("""
+                        INSERT INTO fee_reminders (payment_id, sent_to, status, error)
+                        VALUES (?, ?, ?, ?)
+                    """), (payment_id, "", "skipped", "No parent emails on file"))
+                    continue
+
+                # Compose email
+                from datetime import datetime as _d3
+                try:
+                    due = _d3.fromisoformat(p["due_date"]).strftime("%d %b %Y")
+                except Exception:
+                    due = p["due_date"] or "—"
+
+                html = f"""
+                <html><body style="font-family:Arial,sans-serif;padding:20px;background:#f5f5f5;">
+                    <div style="max-width:600px;margin:0 auto;background:white;border-radius:12px;
+                                padding:30px;box-shadow:0 4px 15px rgba(0,0,0,0.05);">
+                        <h2 style="color:#4f46e5;margin:0 0 20px 0;">Fee Payment Reminder</h2>
+                        <p>Dear Parent/Guardian,</p>
+                        <p>This is a friendly reminder about an outstanding fee payment for
+                           <b>{p['student_name']}</b>:</p>
+                        <table style="width:100%;border-collapse:collapse;margin:20px 0;">
+                            <tr><td style="padding:8px 0;color:#6b7280;">Fee Type</td>
+                                <td style="padding:8px 0;font-weight:600;">{p['fee_type'].title()}</td></tr>
+                            <tr><td style="padding:8px 0;color:#6b7280;">Amount</td>
+                                <td style="padding:8px 0;font-weight:600;">Rs. {float(p['amount']):,.2f}</td></tr>
+                            <tr><td style="padding:8px 0;color:#6b7280;">Due Date</td>
+                                <td style="padding:8px 0;font-weight:600;color:#ef4444;">{due}</td></tr>
+                        </table>
+                        <p>Please arrange payment at your earliest convenience.</p>
+                        <p style="color:#6b7280;font-size:12px;margin-top:30px;">
+                            This is an automated reminder from Student Marks Analyzer.
+                        </p>
+                    </div>
+                </body></html>
+                """
+
+                subject = f"Fee Reminder: {p['fee_type'].title()} for {p['student_name']}"
+
+                ok = False
+                err = None
+                try:
+                    ok = send_email_notification(emails[0], subject, html)
+                    if not ok:
+                        err = "Email send returned False"
+                except Exception as e:
+                    err = str(e)
+
+                # Log
+                if ok:
+                    summary["sent"] += 1
+                else:
+                    summary["failed"] += 1
+
+                cursor.execute(_q("""
+                    INSERT INTO fee_reminders (payment_id, sent_to, status, error)
+                    VALUES (?, ?, ?, ?)
+                """), (payment_id, ",".join(emails), "sent" if ok else "failed", err))
+
+            conn.commit()
+
+        print(f"[FEE REMINDERS] sent={summary['sent']} skipped={summary['skipped']} failed={summary['failed']} total={summary['total']}")
+    except Exception as e:
+        print(f"[ERROR] Fee reminder job failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return summary
+
+
+@app.get("/fees/reminders")
+def list_fee_reminders(limit: int = 50, admin=Depends(require_admin)):
+    """List recent fee reminder log entries."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                SELECT fr.*, fp.fee_type, fp.amount, s.name AS student_name
+                FROM fee_reminders fr
+                LEFT JOIN fee_payments fp ON fp.id = fr.payment_id
+                LEFT JOIN students s ON s.id = fp.student_id
+                ORDER BY fr.sent_at DESC LIMIT ?
+            """), (limit,))
+            rows = [dict(r) for r in cursor.fetchall()]
+            for r in rows:
+                if r.get("sent_at"):
+                    r["sent_at"] = str(r["sent_at"])[:19]
+            return {"count": len(rows), "reminders": rows}
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
+@app.post("/fees/reminders/run-now")
+def run_fee_reminders_now(days_ahead: int = 2, admin=Depends(require_admin)):
+    """Manually trigger the fee reminder job."""
+    summary = send_fee_reminders(days_ahead=days_ahead, run_now_override=True)
+    return {"message": "Reminder job completed", "summary": summary}
+
+
+@app.get("/fees/reminders/preview")
+def preview_fee_reminders(days_ahead: int = 2, admin=Depends(require_admin)):
+    """Preview which payments would receive reminders."""
+    try:
+        from datetime import datetime as _dt, timedelta as _td
+        cutoff = (_dt.now() + _td(days=days_ahead)).date().isoformat()
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("""
+                SELECT fp.id, s.name AS student_name, fp.fee_type, fp.amount, fp.due_date
+                FROM fee_payments fp
+                JOIN students s ON fp.student_id = s.id
+                WHERE fp.status = 'pending'
+                  AND fp.due_date IS NOT NULL
+                  AND fp.due_date <= ?
+                ORDER BY fp.due_date ASC
+            """), (cutoff,))
+            rows = [dict(r) for r in cursor.fetchall()]
+            return {"count": len(rows), "payments": rows, "days_ahead": days_ahead}
+    except Exception as e:
+        raise HTTPException(500, f"Failed: {e}")
+
+
 # ============================================================
 # EXPORT
 # ============================================================
@@ -5898,6 +6111,12 @@ def auto_backup():
 
 scheduler.add_job(auto_backup, IntervalTrigger(hours=AUTO_BACKUP_HOURS), id="auto_backup")
 scheduler.add_job(send_weekly_report, IntervalTrigger(days=7), id="weekly_report")
+# Feature 15: daily fee reminders at 9 AM UTC
+try:
+    scheduler.add_job(send_fee_reminders, CronTrigger(hour=9, minute=0), id="fee_reminders")
+    print("[OK] Fee reminder scheduler registered (9 AM UTC daily)")
+except Exception as _e:
+    print(f"[WARN] Could not register fee reminder scheduler: {_e}")
 
 
 @app.on_event("startup")
