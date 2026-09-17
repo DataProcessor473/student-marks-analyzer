@@ -6591,3 +6591,184 @@ def exam_import_template(user=Depends(require_role("admin", "teacher"))):
     return Response(content=template, media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=exam_results_template.csv"})
 
+
+# ============================================================
+# MONTHLY ATTENDANCE PDF (Feature 17)
+# ============================================================
+_MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December"]
+
+
+@app.get("/attendance/{student_id}/monthly-report")
+def monthly_attendance_report(
+    student_id: int,
+    year: int = 0,
+    month: int = 0,
+    user=Depends(require_user),
+):
+    """Generate a monthly attendance PDF for a student."""
+    if not _can_access_student(user, student_id):
+        raise HTTPException(403, "Access denied")
+
+    from datetime import datetime as _dt
+    now = _dt.now()
+    if year == 0:
+        year = now.year
+    if month == 0:
+        month = now.month
+
+    if month < 1 or month > 12:
+        raise HTTPException(400, "Month must be 1-12")
+    if year < 2000 or year > 2100:
+        raise HTTPException(400, "Year out of range")
+
+    # Fetch student info
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("SELECT id, name, class_name, department, email FROM students WHERE id=?"), (student_id,))
+            srow = cursor.fetchone()
+            if not srow:
+                raise HTTPException(404, "Student not found")
+            student = dict(srow) if not isinstance(srow, dict) else srow
+
+            # Fetch attendance for the month
+            month_prefix = str(year) + "-" + str(month).zfill(2) + "%"
+            cursor.execute(_q("""
+                SELECT date, status, subject, notes
+                FROM attendance
+                WHERE student_id = ? AND date LIKE ?
+                ORDER BY date ASC
+            """), (student_id, month_prefix))
+            att_rows = [dict(r) for r in cursor.fetchall()]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, "DB error: " + str(e))
+
+    # Compute summary
+    total = len(att_rows)
+    present = sum(1 for a in att_rows if (a.get("status") or "").lower() == "present")
+    absent = sum(1 for a in att_rows if (a.get("status") or "").lower() == "absent")
+    late = sum(1 for a in att_rows if (a.get("status") or "").lower() == "late")
+    excused = sum(1 for a in att_rows if (a.get("status") or "").lower() == "excused")
+    rate = (present / total * 100) if total > 0 else 0
+
+    # Build PDF
+    try:
+        from fpdf import FPDF
+    except ImportError:
+        raise HTTPException(500, "fpdf2 not installed")
+
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # Header
+    pdf.set_fill_color(79, 70, 229)
+    pdf.rect(0, 0, 210, 30, "F")
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_xy(15, 10)
+    pdf.cell(180, 10, "Student Marks Analyzer", 0, 1, "L")
+    pdf.set_font("Helvetica", "", 11)
+    pdf.set_xy(15, 20)
+    pdf.cell(180, 8, "ATTENDANCE REPORT", 0, 1, "L")
+    pdf.set_text_color(0, 0, 0)
+
+    # Student info
+    pdf.set_xy(15, 40)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(40, 7, "Student:", 0, 0)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(140, 7, str(student.get("name", "-")), 0, 1)
+
+    pdf.set_x(15)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(40, 7, "Student ID:", 0, 0)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(140, 7, str(student.get("id", "-")), 0, 1)
+
+    pdf.set_x(15)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(40, 7, "Class:", 0, 0)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(140, 7, str(student.get("class_name") or "-"), 0, 1)
+
+    pdf.set_x(15)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(40, 7, "Month:", 0, 0)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(140, 7, _MONTH_NAMES[month] + " " + str(year), 0, 1)
+
+    # Summary
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(180, 8, "Summary", 0, 1)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(90, 7, "Total Days:      " + str(total), 0, 0)
+    pdf.cell(90, 7, "Present:         " + str(present) + " (" + str(round(present/total*100,1) if total else 0) + "%)", 0, 1)
+    pdf.cell(90, 7, "Absent:          " + str(absent), 0, 0)
+    pdf.cell(90, 7, "Late:            " + str(late), 0, 1)
+    pdf.cell(90, 7, "Excused:         " + str(excused), 0, 0)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(90, 7, "Attendance Rate: " + str(round(rate, 1)) + "%", 0, 1)
+
+    # Table header
+    pdf.ln(4)
+    pdf.set_fill_color(241, 245, 249)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(35, 8, "  Date", 1, 0, "L", True)
+    pdf.cell(35, 8, "  Status", 1, 0, "L", True)
+    pdf.cell(60, 8, "  Subject", 1, 0, "L", True)
+    pdf.cell(50, 8, "  Notes", 1, 1, "L", True)
+
+    # Table rows
+    pdf.set_font("Helvetica", "", 10)
+    if not att_rows:
+        pdf.cell(180, 8, "  No attendance records for this month.", 1, 1, "L")
+    else:
+        for a in att_rows:
+            _status = str(a.get("status") or "-").title()
+            if _status == "Present":
+                pdf.set_text_color(16, 185, 129)
+            elif _status == "Absent":
+                pdf.set_text_color(220, 38, 38)
+            elif _status == "Late":
+                pdf.set_text_color(217, 119, 6)
+            else:
+                pdf.set_text_color(0, 0, 0)
+            pdf.cell(35, 7, "  " + str(a.get("date") or ""), 1, 0, "L")
+            pdf.cell(35, 7, "  " + _status, 1, 0, "L")
+            pdf.set_text_color(0, 0, 0)
+            _subj = str(a.get("subject") or "-")[:30]
+            _notes = str(a.get("notes") or "-")[:25]
+            pdf.cell(60, 7, "  " + _subj, 1, 0, "L")
+            pdf.cell(50, 7, "  " + _notes, 1, 1, "L")
+
+    # Signature
+    pdf.ln(15)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(100, 6, "", 0, 1)
+    pdf.cell(60, 6, "_________________________", 0, 1)
+    pdf.cell(60, 5, "Authorized Signature", 0, 1)
+
+    # Footer
+    pdf.set_y(-20)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(120, 120, 120)
+    pdf.cell(180, 5, "Generated on " + _dt.now().strftime("%d %b %Y at %H:%M"), 0, 0, "C")
+
+    out = pdf.output(dest="S")
+    if isinstance(out, str):
+        pdf_bytes = out.encode("latin-1")
+    else:
+        pdf_bytes = bytes(out)
+
+    filename = "attendance_" + str(student_id) + "_" + str(year) + "_" + str(month).zfill(2) + ".pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=" + filename},
+    )
+
