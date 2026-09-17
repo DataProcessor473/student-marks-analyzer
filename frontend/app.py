@@ -3559,6 +3559,93 @@ elif selected == t("users") and user_role == "admin":
                     st.rerun()
 
 
+        # ============================================================
+        # CLASS ASSIGNMENTS (teacher access control)
+        # ============================================================
+        st.markdown("---")
+        st.markdown("### 🏫 Class Assignments")
+        st.caption("Assign which classes each teacher can access. Teachers only see students in their assigned classes.")
+
+        # Fetch available classes
+        _cls_resp = api_get("/auth/classes/all")
+        _cls_data = handle_response(_cls_resp, show_error=False) if _cls_resp else None
+        _all_classes = _cls_data.get("classes", []) if _cls_data else []
+
+        if not _all_classes:
+            st.info("No classes exist yet. Create students with a class first (e.g., CS-A) via the Analyze page.")
+        else:
+            # Filter to teacher users only
+            _teachers = [u for u in users if u.get("role") == "teacher"]
+            if not _teachers:
+                st.info("No teacher accounts exist yet. Register a teacher first.")
+            else:
+                _t_opts = {f"{u['username']} ({u.get('full_name') or u['email']})": u["id"] for u in _teachers}
+                _sel_teacher_label = st.selectbox(
+                    "Select teacher",
+                    options=list(_t_opts.keys()),
+                    key="cls_teacher_select",
+                )
+                _sel_teacher_id = _t_opts[_sel_teacher_label]
+
+                # Fetch current assignments
+                _cur_resp = api_get(f"/auth/users/{_sel_teacher_id}/classes")
+                _cur_data = handle_response(_cur_resp, show_error=False) if _cur_resp else None
+                _current_classes = _cur_data.get("classes", []) if _cur_data else []
+
+                st.caption(f"Currently assigned: {', '.join(_current_classes) if _current_classes else 'none'}")
+
+                # Multi-select
+                _chosen = st.multiselect(
+                    "Classes to assign",
+                    options=_all_classes,
+                    default=_current_classes,
+                    key="cls_multiselect",
+                )
+
+                _save_c1, _save_c2 = st.columns([1, 3])
+                with _save_c1:
+                    if st.button("💾 Save Assignments", type="primary", use_container_width=True):
+                        _save_resp = api_post(
+                            f"/auth/users/{_sel_teacher_id}/classes",
+                            json={"class_names": _chosen},
+                        )
+                        if _save_resp and _save_resp.status_code == 200:
+                            _result = _save_resp.json()
+                            st.success(f"✅ {_result.get('message', 'Assigned')}")
+                            st.balloons()
+                            import time as _time; _time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            try:
+                                _err = _save_resp.json().get("detail", "Failed")
+                            except Exception:
+                                _err = "Unknown error"
+                            st.error(f"❌ {_err}")
+                with _save_c2:
+                    if _chosen != _current_classes:
+                        st.caption(f"⚠️ Unsaved changes: {len(_chosen)} class(es) selected")
+                    else:
+                        st.caption("No pending changes")
+
+                # Show all teacher assignments
+                with st.expander("📋 View all teacher assignments"):
+                    _all_rows = []
+                    for _t in _teachers:
+                        _r = api_get(f"/auth/users/{_t['id']}/classes")
+                        _d = handle_response(_r, show_error=False) if _r else None
+                        _cls = _d.get("classes", []) if _d else []
+                        _all_rows.append({
+                            "Teacher": _t["username"],
+                            "Full Name": _t.get("full_name") or "—",
+                            "Email": _t["email"],
+                            "Assigned Classes": ", ".join(_cls) if _cls else "(none)",
+                            "Count": len(_cls),
+                        })
+                    if _all_rows:
+                        import pandas as _pd
+                        st.dataframe(_pd.DataFrame(_all_rows), use_container_width=True, hide_index=True)
+
+
 # ============================================================
 # PAGE: AUDIT LOG (ADMIN)
 # ============================================================
