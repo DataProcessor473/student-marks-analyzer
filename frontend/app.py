@@ -2664,6 +2664,24 @@ elif selected == t("assignments"):
                     adue = st.date_input("Due Date")
                     atm = st.number_input("Total Marks", 0, 500, 100)
 
+                st.markdown("**🔁 Recurrence**")
+                rec_c1, rec_c2 = st.columns(2)
+                with rec_c1:
+                    _rec_type = st.selectbox(
+                        "Repeat",
+                        options=["none", "weekly", "monthly"],
+                        index=0,
+                        key="rec_type",
+                        help="Create multiple assignments automatically",
+                    )
+                with rec_c2:
+                    _rec_end = st.date_input(
+                        "Repeat until",
+                        value=adue + timedelta(days=42),
+                        key="rec_end",
+                        disabled=(_rec_type == "none"),
+                    )
+
                 if st.form_submit_button("➕ Create", type="primary"):
                     if not at:
                         st.warning("Enter title")
@@ -2672,14 +2690,26 @@ elif selected == t("assignments"):
                             "title": at, "description": ad or None,
                             "class_name": ac or None, "subject": asub or None,
                             "due_date": adue.isoformat(), "total_marks": atm,
+                            "recurrence": _rec_type,
+                            "recurrence_end": _rec_end.isoformat() if _rec_type != "none" else None,
                         }
                         r = api_post("/assignments/create", json=payload)
                         if r and r.status_code == 200:
-                            st.success("Created!")
-                            time.sleep(0.5)
+                            _resp = r.json()
+                            _gen = _resp.get("generated", 1)
+                            if _gen > 1:
+                                st.success("Created " + str(_gen) + " assignments!")
+                                st.balloons()
+                            else:
+                                st.success("Created!")
+                            time.sleep(0.7)
                             st.rerun()
                         else:
-                            st.error(r.json().get("detail", "Failed"))
+                            try:
+                                _err = r.json().get("detail", "Failed")
+                            except Exception:
+                                _err = "Failed"
+                            st.error(str(_err))
 
 
 # ============================================================
