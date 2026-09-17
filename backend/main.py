@@ -6813,3 +6813,196 @@ def monthly_attendance_report(
         headers={"Content-Disposition": "attachment; filename=" + filename},
     )
 
+
+# ============================================================
+# CALENDAR EXPORT (.ics) - Feature 23s
+# ============================================================
+def _ics_escape(s: str) -> str:
+    """Escape special chars per RFC 5545."""
+    if not s:
+        return ""
+    return str(s).replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
+
+
+def _ics_datetime(date_str: str, time_str: str = None) -> str:
+    """Format a date (+ optional time) as iCal DTSTART value."""
+    try:
+        d = date_str.replace("-", "").strip()
+        if time_str:
+            t = time_str.replace(":", "").strip()
+            if len(t) == 4:
+                t = t + "00"
+            return d + "T" + t
+        return d + "T090000"
+    except Exception:
+        return "20260101T090000"
+
+
+def _ics_add_minutes(dt_str: str, minutes: int) -> str:
+    """Add N minutes to a compact iCal datetime string."""
+    try:
+        from datetime import datetime as _dt, timedelta as _td
+        if "T" in dt_str:
+            _d = _dt.strptime(dt_str, "%Y%m%dT%H%M%S")
+            _d2 = _d + _td(minutes=minutes)
+            return _d2.strftime("%Y%m%dT%H%M%S")
+        return dt_str
+    except Exception:
+        return dt_str
+
+
+def _build_ics_event(uid: str, summary: str, description: str,
+                     dtstart: str, dtend: str, location: str = "") -> str:
+    """Build a single VEVENT block."""
+    from datetime import datetime as _dt
+    now = _dt.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    lines = [
+        "BEGIN:VEVENT",
+        "UID:" + uid + "@student-marks-analyzer",
+        "DTSTAMP:" + now,
+        "DTSTART:" + dtstart,
+        "DTEND:" + dtend,
+        "SUMMARY:" + _ics_escape(summary),
+        "DESCRIPTION:" + _ics_escape(description),
+    ]
+    if location:
+        lines.append("LOCATION:" + _ics_escape(location))
+    lines.append("END:VEVENT")
+    return "\r\n".join(lines)
+
+
+@app.get("/exams/{exam_id}/ics")
+def exam_to_ics(exam_id: int, user=Depends(require_user)):
+    """Download an exam as an .ics calendar file."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("SELECT * FROM exams WHERE id=?"), (exam_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(404, "Exam not found")
+            exam = dict(row) if not isinstance(row, dict) else row
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, "DB error: " + str(e))
+
+    summary = exam.get("name") or ("Exam #" + str(exam_id))
+    subject = exam.get("subject") or ""
+    if subject:
+        summary = subject + " - " + summary
+
+    dtstart = _ics_datetime(exam.get("exam_date", ""), exam.get("start_time"))
+    dtend = _ics_datetime(exam.get("exam_date", ""), exam.get("end_time"))
+    if not exam.get("end_time"):
+        dtend = _ics_add_minutes(dtstart, 120)
+
+    desc = "Class: " + str(exam.get("class_name") or "-")
+    desc += " | Total Marks: " + str(exam.get("total_marks") or 100)
+    if exam.get("notes"):
+        desc += " | " + str(exam.get("notes"))
+
+    ics = "\r\n".join([
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Student Marks Analyzer//Exam//EN",
+        "CALSCALE:GREGORIAN",
+        _build_ics_event(
+            "exam-" + str(exam_id),
+            summary,
+            desc,
+            dtstart,
+            dtend,
+            exam.get("room") or "",
+        ),
+        "END:VCALENDAR",
+        "",
+    ])
+
+    return Response(
+        content=ics,
+        media_type="text/calendar",
+        headers={"Content-Disposition": "attachment; filename=exam_" + str(exam_id) + ".ics"},
+    )
+
+
+@app.get("/timetable/class/{class_name}/ics")
+def timetable_to_ics(class_name: str, user=Depends(require_user)):
+    """Download a class weekly timetable as .ics with recurring events."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_q("SELECT * FROM timetable WHERE class_name=? ORDER BY day_of_week, period"), (class_name,))
+            entries = [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        raise HTTPException(500, "DB error: " + str(e))
+
+    if not entries:
+        raise HTTPException(404, "No timetable entries for class " + class_name)
+
+    # Map day names to iCal BYDAY codes
+    day_map = {
+        "Monday": "MO", "Tuesday": "TU", "Wednesday": "WE",
+        "Thursday": "TH", "Friday": "FR", "Saturday": "SA", "Sunday": "SU",
+    }
+
+    # Use the next Monday as a start anchor
+    from datetime import datetime as _dt, timedelta as _td
+    today = _dt.now().date()
+    days_until_monday = (7 - today.weekday()) % 7
+    if days_until_monday == 0:
+        days_until_monday = 7
+    monday = today + _td(days=days_until_monday)
+
+    events = []
+    for i, e in enumerate(entries):
+        day = e.get("day_of_week", "Monday")
+        byday = day_map.get(day, "MO")
+        st = (e.get("start_time") or "09:00").replace(":", "")
+        if len(st) == 4:
+            st = st + "00"
+        et = (e.get("end_time") or "").replace(":", "")
+        if not et:
+            et = _ics_add_minutes("20000101T" + st, 60)[9:]
+        else:
+            if len(et) == 4:
+                et = et + "00"
+
+        event_date = monday
+        offset = list(day_map.keys()).index(day) if day in day_map else 0
+        event_date = monday + _td(days=offset)
+
+        dtstart = event_date.strftime("%Y%m%d") + "T" + st
+        dtend = event_date.strftime("%Y%m%d") + "T" + et
+
+        summary = (e.get("subject") or "Class") + " - " + class_name
+        desc = "Teacher: " + str(e.get("teacher_name") or "-") + " | Period: " + str(e.get("period") or "-")
+
+        lines = [
+            "BEGIN:VEVENT",
+            "UID:timetable-" + str(e.get("id", i)) + "@student-marks-analyzer",
+            "DTSTAMP:" + _dt.utcnow().strftime("%Y%m%dT%H%M%SZ"),
+            "DTSTART:" + dtstart,
+            "DTEND:" + dtend,
+            "RRULE:FREQ=WEEKLY;BYDAY=" + byday + ";COUNT=16",
+            "SUMMARY:" + _ics_escape(summary),
+            "DESCRIPTION:" + _ics_escape(desc),
+        ]
+        if e.get("room"):
+            lines.append("LOCATION:" + _ics_escape(e.get("room")))
+        lines.append("END:VEVENT")
+        events.append("\r\n".join(lines))
+
+    ics = "\r\n".join([
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Student Marks Analyzer//Timetable//EN",
+        "CALSCALE:GREGORIAN",
+    ] + events + ["END:VCALENDAR", ""])
+
+    return Response(
+        content=ics,
+        media_type="text/calendar",
+        headers={"Content-Disposition": "attachment; filename=timetable_" + class_name + ".ics"},
+    )
+
