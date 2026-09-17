@@ -1405,6 +1405,7 @@ with st.sidebar:
             t("reports"), t("attendance"), t("exams"), t("timetable"),
             t("assignments"), t("fees"), t("classes"), t("parent_links"),
             "🏫 Class Assignments",
+            "⚙️ Grade Schemes",
             t("profile"), t("filters"), t("live"), t("notifications"),
             t("scheduled_reports"), t("backup"), t("pdf_templates"),
             t("users"), t("audit"), t("settings"), t("ml"), t("bulk_import"),
@@ -1414,6 +1415,7 @@ with st.sidebar:
             "file-earmark-text", "calendar", "calendar-check", "calendar-week",
             "journal-check", "cash-coin", "building", "people",
             "diagram-3",
+            "sliders",
             "person-circle", "funnel", "broadcast", "bell",
             "envelope-paper", "cloud-download", "file-pdf",
             "person-badge", "journal-text", "gear", "robot", "cloud-upload",
@@ -4134,6 +4136,174 @@ elif selected == "🏫 Class Assignments" and user_role == "admin":
             "A teacher with no assignments sees zero students. "
             "Changes take effect on the teacher's next page load."
         )
+
+
+
+
+# ============================================================
+# PAGE: GRADE SCHEMES (admin only)
+# ============================================================
+elif selected == "⚙️ Grade Schemes" and user_role == "admin":
+    st.markdown(
+        '<div class="main-header"><h1>⚙️ Grade Schemes</h1>'
+        '<p>Define custom grading boundaries for your school</p></div>',
+        unsafe_allow_html=True,
+    )
+
+    _gs_resp = api_get("/grade-schemes")
+    _gs_data = handle_response(_gs_resp, show_error=False) if _gs_resp else None
+    _schemes = _gs_data.get("schemes", []) if _gs_data else []
+
+    # ---------- List schemes ----------
+    st.markdown("### 📋 All Schemes")
+    if not _schemes:
+        st.info("No schemes yet. Create one below.")
+    else:
+        for _s in _schemes:
+            _is_default = bool(_s.get("is_default"))
+            _border = "#10b981" if _is_default else "#e2e8f0"
+            _badge = ("<span style='background:#10b98122;color:#10b981;padding:0.15rem 0.5rem;"
+                      "border-radius:6px;font-size:0.7rem;font-weight:600;'>✓ DEFAULT</span>"
+                      if _is_default else "")
+
+            st.markdown(
+                f"""
+                <div style="border:1px solid {_border};border-radius:10px;
+                            padding:0.75rem 1rem;margin-bottom:0.5rem;
+                            background:{'rgba(16,185,129,0.05)' if _is_default else 'transparent'};">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <div>
+                            <b style="font-size:1.05rem;">{_s.get('name','')}</b> {_badge}
+                            <div style="color:#6b7280;font-size:0.85rem;margin-top:0.2rem;">
+                                {_s.get('description','') or '(no description)'}
+                            </div>
+                        </div>
+                        <div style="color:#9ca3af;font-size:0.8rem;">
+                            {len(_s.get('boundaries', []))} tiers
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # Boundaries table for this scheme
+            with st.expander(f"View boundaries — {_s.get('name')}"):
+                if _s.get("boundaries"):
+                    import pandas as _pd
+                    _bd = _pd.DataFrame(_s["boundaries"])
+                    st.dataframe(_bd, use_container_width=True, hide_index=True)
+
+            # Actions
+            _ac1, _ac2, _ac3, _sp = st.columns([1, 1, 1, 5])
+            with _ac1:
+                if not _is_default:
+                    if st.button("⭐ Set default", key=f"set_def_{_s['id']}"):
+                        _r = api_put(f"/grade-schemes/{_s['id']}", json={"is_default": True})
+                        if _r and _r.status_code == 200:
+                            st.success("Set as default")
+                            st.rerun()
+                        else:
+                            st.error("Failed to set default")
+            with _ac2:
+                if not _is_default:
+                    if st.button("🗑️ Delete", key=f"del_{_s['id']}"):
+                        _r = api_delete(f"/grade-schemes/{_s['id']}")
+                        if _r and _r.status_code == 200:
+                            st.success("Deleted")
+                            st.rerun()
+                        else:
+                            try:
+                                _e = _r.json().get("detail", "Failed")
+                            except Exception:
+                                _e = "Failed"
+                            st.error(_e)
+
+    st.markdown("---")
+
+    # ---------- Create new scheme ----------
+    st.markdown("### ➕ Create New Scheme")
+    with st.expander("Create a scheme", expanded=False):
+        _new_name = st.text_input("Scheme name", placeholder="e.g., CBSE Indian", key="gs_new_name")
+        _new_desc = st.text_input("Description (optional)", key="gs_new_desc")
+        _new_default = st.checkbox("Set as default", key="gs_new_default")
+
+        st.markdown("**Grade boundaries** (define each tier):")
+        st.caption("Example: A+ from 91 to 100, points 10. Scores between 91-100 get A+.")
+
+        # Simple editor: up to 8 tiers
+        _tiers = []
+        _default_tiers = [
+            ("A+", 90, 100, 10),
+            ("A",  80, 89,  9),
+            ("B",  70, 79,  8),
+            ("C",  60, 69,  7),
+            ("D",  50, 59,  6),
+            ("E",  40, 49,  5),
+            ("F",  0,  39,  0),
+        ]
+
+        for _i, (_dg, _dmin, _dmax, _dpts) in enumerate(_default_tiers):
+            _c1, _c2, _c3, _c4 = st.columns([2, 2, 2, 2])
+            with _c1:
+                _g = st.text_input(f"Grade {_i+1}", value=_dg, key=f"gs_g_{_i}")
+            with _c2:
+                _mn = st.number_input(f"Min {_i+1}", value=float(_dmin), min_value=0.0, max_value=100.0, step=1.0, key=f"gs_mn_{_i}")
+            with _c3:
+                _mx = st.number_input(f"Max {_i+1}", value=float(_dmax), min_value=0.0, max_value=100.0, step=1.0, key=f"gs_mx_{_i}")
+            with _c4:
+                _pt = st.number_input(f"Points {_i+1}", value=int(_dpts), min_value=0, max_value=10, step=1, key=f"gs_pt_{_i}")
+            _tiers.append({"grade": _g, "min": _mn, "max": _mx, "points": _pt})
+
+        if st.button("💾 Create Scheme", type="primary", key="gs_create"):
+            if not _new_name.strip():
+                st.error("Scheme name is required")
+            else:
+                _payload = {
+                    "name": _new_name.strip(),
+                    "description": _new_desc.strip() or None,
+                    "boundaries": _tiers,
+                    "is_default": _new_default,
+                }
+                _r = api_post("/grade-schemes/create", json=_payload)
+                if _r and _r.status_code == 200:
+                    st.success("Scheme created!")
+                    st.balloons()
+                    st.rerun()
+                else:
+                    try:
+                        _e = _r.json().get("detail", "Failed")
+                    except Exception:
+                        _e = "Unknown error"
+                    st.error(f"Failed: {_e}")
+
+    st.markdown("---")
+
+    # ---------- Preview ----------
+    st.markdown("### 🔮 Preview")
+    st.caption("See what grade a score would get under each scheme.")
+
+    if _schemes:
+        _pv_score = st.number_input("Test score", min_value=0.0, max_value=100.0, value=75.0, step=1.0, key="gs_preview_score")
+
+        _preview_rows = []
+        for _s in _schemes:
+            _matched = None
+            for _b in _s.get("boundaries", []):
+                try:
+                    if float(_b["min"]) <= _pv_score <= float(_b["max"]):
+                        _matched = _b
+                        break
+                except Exception:
+                    continue
+            _preview_rows.append({
+                "Scheme": _s.get("name"),
+                "Grade": _matched["grade"] if _matched else "—",
+                "Points": _matched["points"] if _matched else "—",
+            })
+
+        import pandas as _pd
+        st.dataframe(_pd.DataFrame(_preview_rows), use_container_width=True, hide_index=True)
 
 
 # ============================================================
