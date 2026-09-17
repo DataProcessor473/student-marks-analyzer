@@ -876,7 +876,7 @@ def api_get(endpoint, **kwargs):
     try:
         headers = kwargs.pop("headers", {})
         headers.update(get_auth_headers())
-        return requests.get(f"{API_URL}{endpoint}", headers=headers, timeout=15, **kwargs)
+        return requests.get(f"{API_URL}{endpoint}", headers=headers, timeout=90, **kwargs)
     except Exception as e:
         st.error(f"❌ Network error: {e}")
         return None
@@ -886,7 +886,7 @@ def api_post(endpoint, **kwargs):
     try:
         headers = kwargs.pop("headers", {})
         headers.update(get_auth_headers())
-        return requests.post(f"{API_URL}{endpoint}", headers=headers, timeout=30, **kwargs)
+        return requests.post(f"{API_URL}{endpoint}", headers=headers, timeout=90, **kwargs)
     except Exception as e:
         st.error(f"❌ Network error: {e}")
         return None
@@ -896,7 +896,7 @@ def api_put(endpoint, **kwargs):
     try:
         headers = kwargs.pop("headers", {})
         headers.update(get_auth_headers())
-        return requests.put(f"{API_URL}{endpoint}", headers=headers, timeout=15, **kwargs)
+        return requests.put(f"{API_URL}{endpoint}", headers=headers, timeout=90, **kwargs)
     except Exception as e:
         st.error(f"❌ Network error: {e}")
         return None
@@ -906,7 +906,7 @@ def api_delete(endpoint, **kwargs):
     try:
         headers = kwargs.pop("headers", {})
         headers.update(get_auth_headers())
-        return requests.delete(f"{API_URL}{endpoint}", headers=headers, timeout=15, **kwargs)
+        return requests.delete(f"{API_URL}{endpoint}", headers=headers, timeout=90, **kwargs)
     except Exception as e:
         st.error(f"❌ Network error: {e}")
         return None
@@ -1040,7 +1040,7 @@ if not st.session_state.logged_in:
                                 r = requests.post(
                                     f"{API_URL}/auth/login",
                                     params={"username": identifier.strip(), "password": password},
-                                    timeout=15,
+                                    timeout=90,
                                 )
                                 if r.status_code == 200:
                                     d = r.json()
