@@ -2751,7 +2751,11 @@ elif selected == t("timetable"):
 elif selected == t("assignments"):
     st.markdown(f'<div class="main-header"><h1>{t("assignments")}</h1><p>Track assignments and submissions</p></div>', unsafe_allow_html=True)
 
-    tab1, tab2 = st.tabs(["📋 All", "➕ Create"])
+    if user_role in ("admin", "teacher"):
+        tab1, tab2 = st.tabs(["📋 All", "➕ Create"])
+    else:
+        tab1 = st.tabs(["📋 All"])[0]
+        tab2 = None
 
     with tab1:
         r = api_get("/assignments")
@@ -2787,7 +2791,8 @@ elif selected == t("assignments"):
         else:
             st.info("No assignments yet")
 
-    with tab2:
+    if tab2 is not None:
+      with tab2:
         if user_role in ["admin", "teacher"]:
             st.markdown("### Create Assignment")
             with st.form("create_assignment"):
@@ -2855,7 +2860,18 @@ elif selected == t("assignments"):
 elif selected == t("fees"):
     st.markdown(f'<div class="main-header"><h1>{t("fees")}</h1><p>Fee structure and payments</p></div>', unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["💵 Payments", "📋 Structure", "➕ Record Payment", "⏰ Reminders"])
+    if user_role in ("admin", "teacher"):
+        tab1, tab2, tab3, tab4 = st.tabs(["💵 Payments", "📋 Structure", "➕ Record Payment", "⏰ Reminders"])
+    elif user_role == "parent":
+        tab1, tab2, tab3, tab4 = st.tabs(["💵 Payments"])
+        tab2 = None
+        tab3 = None
+        tab4 = None
+    else:
+        tab1 = st.tabs(["💵 Payments"])[0]
+        tab2 = None
+        tab3 = None
+        tab4 = None
 
     with tab1:
         r = api_get("/fees/payments")
@@ -2934,7 +2950,8 @@ elif selected == t("fees"):
         else:
             st.info("No payments recorded yet")
 
-    with tab2:
+    if tab2 is not None:
+      with tab2:
         r = api_get("/fees/structure")
         data = handle_response(r, show_error=False) if r else None
         structures = data.get("structures", []) if data else []
@@ -2977,7 +2994,8 @@ elif selected == t("fees"):
                         else:
                             st.error(r.json().get("detail", "Failed"))
 
-    with tab3:
+    if tab3 is not None:
+      with tab3:
         if user_role in ["admin", "teacher"]:
             st.markdown("### Record Payment")
             r = api_get("/students", params={"limit": 500})
@@ -3016,7 +3034,8 @@ elif selected == t("fees"):
 
 
 
-    with tab4:
+    if tab4 is not None:
+      with tab4:
         st.markdown("### ⏰ Fee Reminders")
         st.caption("Automated email reminders for pending fees. Runs daily at 9 AM UTC.")
 
