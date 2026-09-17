@@ -175,6 +175,36 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 
+# ============================================================
+# URL-PARAM SESSION PERSISTENCE (no external dependencies)
+# ============================================================
+def _restore_session_from_url():
+    if st.session_state.get("logged_in"):
+        return True
+    try:
+        _t = st.query_params.get("t")
+        if _t:
+            _url = API_URL + "/auth/me"
+            _r = requests.get(_url, headers={"Authorization": "Bearer " + _t}, timeout=10)
+            if _r.status_code == 200:
+                _user = _r.json()
+                st.session_state.token = _t
+                st.session_state.user = _user
+                st.session_state.logged_in = True
+                st.session_state.last_activity = datetime.now()
+                st.session_state.language = _user.get("language", "en")
+                st.session_state.theme = _user.get("theme", "light")
+                return True
+        # invalid token -> clear
+        st.query_params.clear()
+    except Exception:
+        pass
+    return False
+
+
+_restore_session_from_url()
+
+
 def _save_session_to_cookie():
     if not _COOKIES_AVAILABLE:
         return
@@ -1151,6 +1181,10 @@ if not st.session_state.logged_in:
                             st.session_state.pending_2fa_username = None
                             st.session_state.pending_2fa_password = None
                             _save_session_to_cookie()
+                            try:
+                                st.query_params["t"] = d["access_token"]
+                            except Exception:
+                                pass
                             st.rerun()
                         else:
                             st.error(r.json().get("detail", "Invalid 2FA code"))
@@ -1198,6 +1232,10 @@ if not st.session_state.logged_in:
                                         st.session_state.logged_in = True
                                         st.session_state.last_activity = datetime.now()
                                         _save_session_to_cookie()
+                                        try:
+                                            st.query_params["t"] = d["access_token"]
+                                        except Exception:
+                                            pass
                                         st.rerun()
                                 elif r.status_code == 423:
                                     st.error("🔒 " + r.json().get("detail", "Account locked"))
@@ -1597,6 +1635,10 @@ with st.sidebar:
         except Exception:
             pass
         _clear_session_cookies()
+        try:
+            st.query_params.clear()
+        except Exception:
+            pass
         for k in list(st.session_state.keys()):
             del st.session_state[k]
         st.rerun()
