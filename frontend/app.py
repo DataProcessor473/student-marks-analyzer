@@ -975,7 +975,128 @@ def apply_theme():
             min-height: 44px;
         }}
     }}
-    </style>
+    
+/* ============================================================ */
+/* SPRINT 2D - FRONTEND POLISH                                   */
+/* ============================================================ */
+
+/* ---- 1. Theme-aware color variables ---- */
+:root {{{{
+    --surface-1: #ffffff;
+    --surface-2: #f8fafc;
+    --surface-3: #f1f5f9;
+    --border-subtle: #e5e7eb;
+    --text-primary: #0f172a;
+    --text-secondary: #6b7280;
+    --text-muted: #9ca3af;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.06);
+}}}}
+@media (prefers-color-scheme: dark) {{{{
+    :root {{{{
+        --surface-1: #0f172a;
+        --surface-2: #1e293b;
+        --surface-3: #334155;
+        --border-subtle: #334155;
+        --text-primary: #f1f5f9;
+        --text-secondary: #cbd5e1;
+        --text-muted: #94a3b8;
+        --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+    }}}}
+}}}}
+
+/* ---- 2. Tablet breakpoint: 768px - 1024px ---- */
+@media (min-width: 769px) and (max-width: 1024px) {{{{
+    .main .block-container {{{{
+        padding-left: 1.5rem !important;
+        padding-right: 1.5rem !important;
+        max-width: 100% !important;
+    }}}}
+    .metric-card {{{{
+        padding: 1rem 1.1rem !important;
+    }}}}
+    .metric-card .metric-value {{{{
+        font-size: 1.5rem !important;
+    }}}}
+    .stTabs [data-baseweb="tab-list"] {{{{
+        gap: 0.4rem !important;
+    }}}}
+    .stTabs [data-baseweb="tab"] {{{{
+        padding: 0.5rem 0.9rem !important;
+        font-size: 0.85rem !important;
+    }}}}
+    /* Stack the top-of-page metric cards into 3 tight columns */
+    div[data-testid="column"] {{{{
+        min-width: 0 !important;
+    }}}}
+    /* Tables get breathing room */
+    [data-testid="stDataFrame"] table {{{{
+        font-size: 0.85rem !important;
+    }}}}
+}}}}
+
+/* ---- 3. Loading skeleton ---- */
+.skeleton {{{{
+    display: block;
+    background: linear-gradient(
+        90deg,
+        var(--surface-2) 0%,
+        var(--surface-3) 50%,
+        var(--surface-2) 100%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.4s ease-in-out infinite;
+    border-radius: 6px;
+    height: 1rem;
+    margin: 0.35rem 0;
+}}}}
+.skeleton-lg  {{{{ height: 2.25rem; }}}}
+.skeleton-xl  {{{{ height: 4rem; }}}}
+.skeleton-card {{{{
+    height: 90px;
+    border-radius: 12px;
+}}}}
+@keyframes skeleton-shimmer {{{{
+    0%   {{{{ background-position: 200% 0; }}}}
+    100% {{{{ background-position: -200% 0; }}}}
+}}}}
+
+/* ---- 4. Error boundary card ---- */
+.error-boundary {{{{
+    padding: 1rem 1.25rem;
+    border-radius: 10px;
+    border-left: 4px solid #ef4444;
+    background: rgba(239, 68, 68, 0.06);
+    color: var(--text-primary);
+    margin: 0.75rem 0;
+}}}}
+.error-boundary strong {{{{
+    color: #ef4444;
+    display: block;
+    margin-bottom: 0.35rem;
+    font-size: 0.95rem;
+}}}}
+.error-boundary small {{{{
+    color: var(--text-secondary);
+    display: block;
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+    word-break: break-word;
+}}}}
+
+/* ---- 5. Smooth theme transitions ---- */
+.main .block-container,
+.metric-card,
+.stButton > button,
+.stTextInput input,
+.stNumberInput input,
+.stTextArea textarea {{{{
+    transition: background-color 180ms ease, border-color 180ms ease,
+                color 180ms ease;
+}}}}
+
+</style>
     """, unsafe_allow_html=True)
 
 
@@ -1848,7 +1969,7 @@ if selected == t("dashboard"):
                         '<div style="border-left:3px solid #6366f1;padding:0.5rem 1rem;'
                         'background:rgba(99,102,241,0.06);border-radius:8px;margin:0.4rem 0;">'
                         + _ic + ' <b>' + (_n.get("note_type") or "").title() + '</b> '
-                        '<span style="color:#6b7280;font-size:0.85rem;">— '
+                        '<span style="color:var(--text-secondary);font-size:0.85rem;">— '
                         + (_n.get("author_name") or "Staff") + ' · ' + (_n.get("created_at") or "")[:10]
                         + '</span>'
                         '<div style="margin-top:0.3rem;">' + (_n.get("content") or "") + '</div>'
@@ -1893,7 +2014,7 @@ if selected == t("dashboard"):
                         '<div style="border:1px solid #e2e8f0;border-radius:8px;padding:0.7rem 1rem;'
                         'margin-bottom:0.4rem;background:white;">'
                         + _urgency + ' <b>' + (_a.get("title") or "Assignment") + '</b> '
-                        '<span style="color:#6b7280;font-size:0.85rem;">— '
+                        '<span style="color:var(--text-secondary);font-size:0.85rem;">— '
                         + (_a.get("subject") or "") + ' · ' + _label + '</span>'
                         '</div>',
                         unsafe_allow_html=True,
@@ -1991,7 +2112,7 @@ if selected == t("dashboard"):
                                 <div style="font-size:1.8rem;">{_r.get('icon','🏅')}</div>
                                 <div>
                                     <b>{_r.get('name','')}</b>
-                                    <span style="color:#6b7280;font-size:0.85rem;">
+                                    <span style="color:var(--text-secondary);font-size:0.85rem;">
                                         — awarded to {_r.get('student_name','')}
                                     </span>
                                     <div style="font-size:0.75rem;color:#9ca3af;">
@@ -2112,7 +2233,7 @@ if selected == t("dashboard"):
                                 'border-radius:8px; margin-bottom:0.5rem;">'
                                 '<div style="display:flex;justify-content:space-between;">'
                                 '<div><b style="color:' + _col + ';">' + _ic + ' ' + _nt.title() + '</b>'
-                                ' <span style="color:#6b7280;font-size:0.85rem;">— ' + _student + ' · ' + _author + '</span></div>'
+                                ' <span style="color:var(--text-secondary);font-size:0.85rem;">— ' + _student + ' · ' + _author + '</span></div>'
                                 '<small style="color:#9ca3af;">' + _date + '</small>'
                                 '</div>'
                                 '<div style="margin-top:0.35rem;color:inherit;font-size:0.9rem;">' + _content + '</div>'
@@ -2664,9 +2785,9 @@ elif selected == t("attendance") and user_role == "student":
             _rate_color = "#10b981" if _rate >= 80 else "#f59e0b" if _rate >= 60 else "#ef4444"
             st.markdown(
                 '<div class="metric-card" style="text-align:center;padding:2rem;">'
-                + '<div style="font-size:1rem;color:#6b7280;">Overall Attendance</div>'
+                + '<div style="font-size:1rem;color:var(--text-secondary);">Overall Attendance</div>'
                 + '<div style="font-size:4rem;font-weight:800;color:' + _rate_color + ';">' + str(round(_rate, 1)) + '%</div>'
-                + '<div style="font-size:1rem;color:#6b7280;">out of ' + str(_ad.get("total_days", 0)) + ' days</div>'
+                + '<div style="font-size:1rem;color:var(--text-secondary);">out of ' + str(_ad.get("total_days", 0)) + ' days</div>'
                 + '</div>',
                 unsafe_allow_html=True,
             )
@@ -3119,7 +3240,7 @@ elif selected == t("assignments") and user_role == "student":
                     + '<div><b>' + str(a.get("title") or "Untitled") + '</b></div>'
                     + '<div style="color:' + _col + ';font-weight:600;font-size:0.85rem;">' + _urg + '</div>'
                     + '</div>'
-                    + '<div style="color:#6b7280;font-size:0.85rem;margin-top:0.3rem;">'
+                    + '<div style="color:var(--text-secondary);font-size:0.85rem;margin-top:0.3rem;">'
                     + 'Subject: ' + str(a.get("subject") or "-")
                     + ' | Due: ' + str(a.get("due_date") or "-")
                     + ' | Marks: ' + str(a.get("total_marks", 100))
@@ -4006,7 +4127,7 @@ elif selected == t("profile"):
                             'padding:0.15rem 0.5rem;border-radius:6px;font-size:0.7rem;'
                             'font-weight:600;margin-left:0.5rem;">👁 Visible to parents</span>'
                             if _is_public else
-                            '<span style="background:#6b728022;color:#6b7280;'
+                            '<span style="background:#6b728022;color:var(--text-secondary);'
                             'padding:0.15rem 0.5rem;border-radius:6px;font-size:0.7rem;'
                             'font-weight:600;margin-left:0.5rem;">🔒 Private</span>'
                         )
@@ -4024,7 +4145,7 @@ elif selected == t("profile"):
                                 <div style="display:flex;justify-content:space-between;align-items:center;">
                                     <div>
                                         <b style="color:{_color};">{_icon} {_ntype.title()}</b>
-                                        <span style="color:#6b7280;font-size:0.85rem;margin-left:0.5rem;">
+                                        <span style="color:var(--text-secondary);font-size:0.85rem;margin-left:0.5rem;">
                                             — {_author} · {_created}
                                         </span>
                                         {_visibility_badge}
@@ -4048,7 +4169,7 @@ elif selected == t("profile"):
                                         st.error("Failed to delete")
                             with _dc2:
                                 st.markdown(
-                                    f'<small style="color:#6b7280;">ID: {_note_id}</small>',
+                                    f'<small style="color:var(--text-secondary);">ID: {_note_id}</small>',
                                     unsafe_allow_html=True,
                                 )
 
@@ -4401,7 +4522,7 @@ elif selected == t("live"):
                         <span style="font-size: 1.1rem;">{icon}</span>
                         <b style="margin-left: 0.5rem;">{label}</b>
                     </div>
-                    <small style="color: #6b7280;">{event_time_str}</small>
+                    <small style="color: var(--text-secondary);">{event_time_str}</small>
                 </div>
                 <div style="margin-top: 0.25rem; font-size: 0.85rem; color: #4b5563;">
                     {details_str}
@@ -5183,7 +5304,7 @@ elif selected == t("my_results") and user_role == "student":
                     '<div style="border-left:3px solid #6366f1;padding:0.5rem 1rem;background:rgba(99,102,241,0.06);'
                     'border-radius:8px;margin:0.4rem 0;">'
                     + _ic + ' <b>' + (_n.get("note_type") or "").title() + '</b> '
-                    '<span style="color:#6b7280;font-size:0.85rem;">— ' + (_n.get("author_name") or "") + ' · ' + (_n.get("created_at") or "")[:10] + '</span>'
+                    '<span style="color:var(--text-secondary);font-size:0.85rem;">— ' + (_n.get("author_name") or "") + ' · ' + (_n.get("created_at") or "")[:10] + '</span>'
                     '<div style="margin-top:0.3rem;">' + (_n.get("content") or "") + '</div>'
                     '</div>',
                     unsafe_allow_html=True,
@@ -5449,7 +5570,7 @@ elif selected == "⚙️ Grade Schemes" and user_role == "admin":
                     <div style="display:flex;justify-content:space-between;align-items:center;">
                         <div>
                             <b style="font-size:1.05rem;">{_s.get('name','')}</b> {_badge}
-                            <div style="color:#6b7280;font-size:0.85rem;margin-top:0.2rem;">
+                            <div style="color:var(--text-secondary);font-size:0.85rem;margin-top:0.2rem;">
                                 {_s.get('description','') or '(no description)'}
                             </div>
                         </div>
@@ -5586,8 +5707,58 @@ elif selected == "⚙️ Grade Schemes" and user_role == "admin":
 # ============================================================
 st.markdown("---")
 st.markdown(f"""
-<div style="text-align: center; color: #6b7280; padding: 2rem 0;">
+<div style="text-align: center; color: var(--text-secondary); padding: 2rem 0;">
     <p>🎓 Student Marks Analyzer Pro v12.0.0 — Complete (Phases 1-4)</p>
     <p style="font-size: 0.8rem;">Logged in as {user_name} ({user_role})</p>
 </div>
 """, unsafe_allow_html=True)
+
+# ============================================================
+# SPRINT 2D - HELPER FUNCTIONS
+# ============================================================
+
+def render_skeleton(kind="line", count=1):
+    """Render shimmer placeholders while data loads.
+
+    kind: 'line' | 'card' | 'hero' | 'title'
+    count: number of lines to render
+    """
+    cls_map = {
+        "line": "skeleton",
+        "title": "skeleton skeleton-lg",
+        "hero": "skeleton skeleton-xl",
+        "card": "skeleton skeleton-card",
+    }
+    cls = cls_map.get(kind, "skeleton")
+    html = "".join('<div class="' + cls + '"></div>' for _ in range(count))
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def render_error_boundary(title, detail=None, retry_label=None):
+    """Show a friendly error card instead of a raw stack trace.
+
+    title: short message shown in bold red
+    detail: optional exception text shown in small grey
+    """
+    html = '<div class="error-boundary"><strong>' + str(title) + '</strong>'
+    if detail:
+        html += "<small>" + str(detail)[:300] + "</small>"
+    html += "</div>"
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def safe_api_call(fn, *args, fallback=None, error_title="Could not load data", **kwargs):
+    """Wrap an API call. Returns (result, error). On success, error is None.
+
+    Usage:
+        data, err = safe_api_call(api_get, "/students")
+        if err:
+            render_error_boundary("Students failed to load", err)
+        else:
+            ...use data...
+    """
+    try:
+        result = fn(*args, **kwargs)
+        return result, None
+    except Exception as e:
+        return fallback, str(e)
