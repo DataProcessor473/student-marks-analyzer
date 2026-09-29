@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Query, Depends, UploadFile, File, Re
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordBearer
+from fastapi import UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Dict, Any
@@ -7098,121 +7099,95 @@ os.makedirs(SUBMISSION_DIR, exist_ok=True)
 @app.post("/assignments/{assignment_id}/submit")
 async def submit_assignment(
     assignment_id: int,
-    request: Request,
+    file: UploadFile = File(None),
+    text_answer: str = Form(""),
     user=Depends(require_role("student", "admin", "teacher")),
 ):
-    """Student submits an assignment (file and/or text).
+    """Student submits an assignment (file and/or text answer)."""
+    # --- 1. Verify assignment exists ---
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(_q("SELECT id FROM assignments WHERE id=?"), (assignment_id,))
+        if not cursor.fetchone():
+            raise HTTPException(404, "Assignment not found")
 
-    Manually parses multipart form (works with both file and text).
-    """
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(_q("SELECT * FROM assignments WHERE id=?"), (assignment_id,))
-            assignment = cursor.fetchone()
-            if not assignment:
-                raise HTTPException(404, "Assignment not found")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(500, "DB error: " + str(e))
-
-    # Find linked student record
+    # --- 2. Find the student id for this user ---
     student_id = None
-    try:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(_q("SELECT id FROM students WHERE user_id=?"), (user["id"],))
+        row = cursor.fetchone()
+        if row:
+            student_id = row["id"] if isinstance(row, dict) else row[0]
+
+    # Admin/teacher without a linked student → pick first student (dev convenience)
+    if not student_id and user["role"] in ("admin", "teacher"):
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(_q("SELECT id FROM students WHERE user_id=?"), (user["id"],))
+            cursor.execute("SELECT id FROM students ORDER BY id LIMIT 1")
             row = cursor.fetchone()
             if row:
                 student_id = row["id"] if isinstance(row, dict) else row[0]
-    except Exception:
-        pass
-
-    if not student_id and user["role"] in ("admin", "teacher"):
-        try:
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT id FROM students ORDER BY id LIMIT 1")
-                row = cursor.fetchone()
-                if row:
-                    student_id = row["id"] if isinstance(row, dict) else row[0]
-        except Exception:
-            pass
 
     if not student_id:
         raise HTTPException(400, "Your account is not linked to a student record")
 
-    # Manually parse form and query params
-    text_answer = ""
-    file_url = None
+    # --- 3. Save uploaded file (if any) ---
+    stored_file_url = None
+    if file is not None and getattr(file, "filename", None):
+        UPLOADS.mkdir(parents=True, exist_ok=True)
+        # Sanitize filename
+        safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", file.filename)
+        # Prefix with assignment + student + timestamp to avoid collisions
+        import uuid
+        stamp = uuid.uuid4().hex[:8]
+        final_name = "a" + str(assignment_id) + "_s" + str(student_id) + "_" + stamp + "_" + safe_name
+        dest = UPLOADS / final_name
+        contents = await file.read()
+        dest.write_bytes(contents)
+        # Public URL served by /uploads static mount
+        stored_file_url = "/uploads/" + final_name
+        print("[SUBMIT] Saved file " + str(dest) + " (" + str(len(contents)) + " bytes)")
 
-    # Query params first
-    try:
-        text_answer = request.query_params.get("text_answer", "") or ""
-    except Exception:
-        pass
+    # --- 4. Upsert submission row ---
+    now = datetime.now().isoformat()
+    status_value = "submitted" if (text_answer or stored_file_url) else "pending"
 
-    # Then form (which may contain both file and text_answer)
-    _content_type_header = request.headers.get("content-type", "")
-    if "multipart/form-data" in _content_type_header or "application/x-www-form-urlencoded" in _content_type_header:
-        try:
-            _form = await request.form()
-            # Text field
-            _form_text = _form.get("text_answer")
-            if _form_text:
-                text_answer = str(_form_text)
-            # File field
-            _uploaded = _form.get("file")
-            if _uploaded is not None and hasattr(_uploaded, "read"):
-                _ct = getattr(_uploaded, "content_type", "") or ""
-                _fn = getattr(_uploaded, "filename", "file.pdf") or "file.pdf"
-                if _ct and _ct not in ["application/pdf", "image/jpeg", "image/jpg", "image/png"]:
-                    raise HTTPException(400, "Only PDF, JPG, PNG files allowed (got: " + _ct + ")")
-                _content = await _uploaded.read()
-                if len(_content) > 5 * 1024 * 1024:
-                    raise HTTPException(400, "File too large (max 5 MB)")
-                _ext = os.path.splitext(_fn)[1].lower() or ".pdf"
-                _fname = "submission_" + str(assignment_id) + "_" + str(student_id) + "_" + str(int(datetime.now().timestamp())) + _ext
-                _fpath = os.path.join(SUBMISSION_DIR, _fname)
-                with open(_fpath, "wb") as _f:
-                    _f.write(_content)
-                file_url = "/uploads/submissions/" + _fname
-                print("[OK] Saved file: " + _fname + " (" + str(len(_content)) + " bytes)")
-        except HTTPException:
-            raise
-        except Exception as _e:
-            print("[WARN] Form parse error: " + str(_e))
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
 
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(_q("SELECT id FROM assignment_submissions WHERE assignment_id=? AND student_id=?"),
-                           (assignment_id, student_id))
-            existing = cursor.fetchone()
+        # Fetch existing submission
+        cursor.execute(_q(
+            "SELECT id, file_url FROM assignment_submissions "
+            "WHERE assignment_id=? AND student_id=?"
+        ), (assignment_id, student_id))
+        existing = cursor.fetchone()
 
-            if existing:
-                cursor.execute(_q("""
-                    UPDATE assignment_submissions
-                    SET status='submitted', submitted_at=?, feedback=COALESCE(?, feedback),
-                        file_url=COALESCE(?, file_url)
-                    WHERE assignment_id=? AND student_id=?
-                """), (datetime.now().isoformat(), text_answer or None, file_url, assignment_id, student_id))
-            else:
-                cursor.execute(_q("""
-                    INSERT INTO assignment_submissions
-                    (assignment_id, student_id, status, submitted_at, feedback, file_url)
-                    VALUES (?, ?, 'submitted', ?, ?, ?)
-                """), (assignment_id, student_id, datetime.now().isoformat(), text_answer or None, file_url))
+        if existing:
+            # Keep prior file_url if the new submit has no file
+            existing_file = existing["file_url"] if isinstance(existing, dict) else existing[1]
+            effective_file = stored_file_url if stored_file_url else existing_file
+            cursor.execute(_q(
+                "UPDATE assignment_submissions "
+                "SET status=?, submitted_at=?, feedback=?, file_url=? "
+                "WHERE assignment_id=? AND student_id=?"
+            ), (status_value, now, text_answer, effective_file, assignment_id, student_id))
+        else:
+            cursor.execute(_q(
+                "INSERT INTO assignment_submissions "
+                "(assignment_id, student_id, status, submitted_at, feedback, file_url) "
+                "VALUES (?, ?, ?, ?, ?, ?)"
+            ), (assignment_id, student_id, status_value, now, text_answer, stored_file_url))
 
-            conn.commit()
+        conn.commit()
 
-        log_live_event(user["id"], "assignment_submitted", {
-            "assignment_id": assignment_id, "student_id": student_id,
-        })
-        return {"message": "Submitted successfully", "student_id": student_id, "file_url": file_url}
-    except Exception as e:
-        raise HTTPException(500, "Save error: " + str(e))
+    return {
+        "message": "Submission saved",
+        "student_id": student_id,
+        "status": status_value,
+        "file_url": stored_file_url,
+        "has_text": bool(text_answer),
+    }
 
 
 @app.get("/assignments/{assignment_id}/my-submission")
