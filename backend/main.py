@@ -3815,7 +3815,7 @@ def list_submissions(assignment_id: int, user=Depends(require_role("admin", "tea
         cursor = conn.cursor()
         cursor.execute(_q("""SELECT s.id as student_id, s.name as student_name,
                    sub.id as submission_id, sub.status, sub.marks_obtained,
-                   sub.feedback, sub.submitted_at
+                   sub.feedback, sub.submitted_at, sub.file_url
             FROM students s
             LEFT JOIN assignment_submissions sub
                 ON sub.student_id = s.id AND sub.assignment_id = ?
