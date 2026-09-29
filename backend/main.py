@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Dict, Any
 from jose import JWTError, jwt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -392,14 +392,14 @@ def get_password_hash(password: str) -> str:
 def create_access_token(data: dict) -> str:
     d = data.copy()
     d["type"] = "access"
-    d["exp"] = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    d["exp"] = datetime.now(UTC) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     return jwt.encode(d, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def create_refresh_token(data: dict) -> str:
     d = data.copy()
     d["type"] = "refresh"
-    d["exp"] = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    d["exp"] = datetime.now(UTC) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     return jwt.encode(d, REFRESH_SECRET_KEY, algorithm=ALGORITHM)
 
 
@@ -1861,8 +1861,8 @@ def check_account_locked(username, conn=None):
         if row and row["locked_until"]:
             try:
                 lu = datetime.fromisoformat(str(row["locked_until"]))
-                if datetime.utcnow() < lu:
-                    mins = int((lu - datetime.utcnow()).total_seconds() / 60) + 1
+                if datetime.now(UTC) < lu:
+                    mins = int((lu - datetime.now(UTC)).total_seconds() / 60) + 1
                     return f"Account locked. Try again in {mins} minute(s)."
             except (ValueError, TypeError):
                 pass
@@ -1881,7 +1881,7 @@ def increment_failed_attempts(username, conn=None):
                 return
             attempts = (row["failed_login_attempts"] or 0) + 1
             if attempts >= MAX_FAILED_ATTEMPTS:
-                lu = (datetime.utcnow() + timedelta(minutes=LOCKOUT_DURATION_MINUTES)).isoformat()
+                lu = (datetime.now(UTC) + timedelta(minutes=LOCKOUT_DURATION_MINUTES)).isoformat()
                 cursor.execute(
                     _q("UPDATE users SET failed_login_attempts=?, locked_until=? WHERE username=?"),
                     (attempts, lu, username),
@@ -1903,7 +1903,7 @@ def reset_failed_attempts(username, conn=None):
             cursor.execute(
                 _q("""UPDATE users SET failed_login_attempts=0, locked_until=NULL, last_login=?
                    WHERE username=?"""),
-                (datetime.utcnow().isoformat(), username),
+                (datetime.now(UTC).isoformat(), username),
             )
             conn.commit()
         else:
@@ -1912,7 +1912,7 @@ def reset_failed_attempts(username, conn=None):
                 cursor.execute(
                     _q("""UPDATE users SET failed_login_attempts=0, locked_until=NULL, last_login=?
                        WHERE username=?"""),
-                    (datetime.utcnow().isoformat(), username),
+                    (datetime.now(UTC).isoformat(), username),
                 )
                 c.commit()
     except Exception:
@@ -1920,7 +1920,7 @@ def reset_failed_attempts(username, conn=None):
 
 
 def save_otp(identifier, otp, purpose):
-    expires = (datetime.utcnow() + timedelta(minutes=OTP_EXPIRE_MINUTES)).isoformat()
+    expires = (datetime.now(UTC) + timedelta(minutes=OTP_EXPIRE_MINUTES)).isoformat()
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -1951,7 +1951,7 @@ def verify_otp(identifier, otp, purpose):
             return False, "Incorrect OTP"
         try:
             exp = datetime.fromisoformat(str(row["expires_at"]))
-            if datetime.utcnow() > exp:
+            if datetime.now(UTC) > exp:
                 return False, "OTP expired. Request a new one."
         except (ValueError, TypeError):
             pass
@@ -2761,7 +2761,7 @@ def change_password(data: PasswordChange, request: Request, user=Depends(require
                 password_changed_at=?,
                 token_version=COALESCE(token_version, 1) + 1
             WHERE id=?
-        """), (new_hash, datetime.utcnow().isoformat(), user["id"]))
+        """), (new_hash, datetime.now(UTC).isoformat(), user["id"]))
 
         conn.commit()
 
@@ -2932,7 +2932,7 @@ def verify_recovery_code(data: TOTPVerify, request: Request):
 
         cursor.execute(_q("""
             UPDATE recovery_codes SET used=1, used_at=? WHERE id=?
-        """), (datetime.utcnow().isoformat(), row["id"]))
+        """), (datetime.now(UTC).isoformat(), row["id"]))
         conn.commit()
 
         cursor.execute(_q("SELECT * FROM users WHERE id=?"), (row["user_id"],))
@@ -3206,7 +3206,7 @@ def update_notification_preferences(data: NotificationPreferences, user=Depends(
              1 if data.email_on_assignment else 0,
              1 if data.email_on_report else 0,
              1 if data.inapp_on_all else 0,
-             datetime.utcnow().isoformat(),
+             datetime.now(UTC).isoformat(),
              user["id"]))
         conn.commit()
     return {"message": "Preferences updated", **data.dict()}
@@ -4114,7 +4114,7 @@ def create_scheduled_report(data: ScheduledReportCreate, user=Depends(require_ad
                 data.schedule,
                 None,                              # last_sent
                 1 if data.enabled else 0,          # enabled
-                datetime.utcnow().isoformat(),     # created_at
+                datetime.now(UTC).isoformat(),     # created_at
             ))
         else:
             # SQLite: original behavior (AUTOINCREMENT handles id)
@@ -4763,7 +4763,7 @@ def update_behavior_note(
                 raise HTTPException(400, "Nothing to update")
 
             updates.append("updated_at=?")
-            params.append(datetime.utcnow().isoformat())
+            params.append(datetime.now(UTC).isoformat())
             params.append(note_id)
 
             cursor.execute(_q(f"UPDATE behavior_notes SET {', '.join(updates)} WHERE id=?"),
@@ -5807,7 +5807,7 @@ def attendance_trends(
     """
     from datetime import datetime, timedelta
 
-    end_date = datetime.utcnow().date()
+    end_date = datetime.now(UTC).date()
     start_date = end_date - timedelta(days=days - 1)
     start_str = start_date.isoformat()
 
