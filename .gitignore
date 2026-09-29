@@ -67,3 +67,24 @@ desktop.ini
 # ML model binaries (regenerate via /ml/train)
 backend/models/*.pkl
 backend/models/*.json
+
+# Local diagnostic / patch scripts (not for repo)
+backend/fix_*.py
+backend/show_*.py
+backend/sanity_check.py
+backend/make_pdf.py
+backend/main.py.bak*
+frontend/find_*.py
+frontend/show_*.py
+
+# Backup files
+*.bak
+*.bak2
+*.bak3
+*.bak-before-*
+
+# Local test artifacts
+backend/student_marks.db*
+backend/uploads/
+backend/reports/
+backend/backups/
