@@ -3760,7 +3760,7 @@ def create_assignment(data: AssignmentCreate, user=Depends(require_role("admin",
                     end_date = _dt.fromisoformat(recurrence_end)
                 except ValueError:
                     conn.commit()
-                    return {"message": "Assignment created (recurrence skipped)", "id": parent_id, "generated": 1}
+                    return {"message": "Assignment created (recurrence skipped)", "id": parent_id, "parent_id": parent_id, "generated": 1}
                 step_days = 7 if recurrence == "weekly" else 30
                 current = start_date + _td(days=step_days)
                 count = 1
@@ -3781,7 +3781,8 @@ def create_assignment(data: AssignmentCreate, user=Depends(require_role("admin",
                     current = current + _td(days=step_days)
             conn.commit()
             return {"message": "Created " + str(len(created_ids)) + " assignment(s)",
-                    "parent_id": parent_id, "generated": len(created_ids)}
+                    "id": parent_id, "parent_id": parent_id,
+                    "generated": len(created_ids)}
     except Exception as e:
         raise HTTPException(500, "Failed: " + str(e))
 
