@@ -233,7 +233,10 @@ if USE_POSTGRES:
         USE_POSTGRES = False
         print(f"[WARN] psycopg2 not installed - falling back to SQLite")
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "student_marks.db")
+DB_PATH = os.environ.get(
+    "DB_PATH",
+    os.path.join(os.path.dirname(__file__), "student_marks.db"),
+)
 
 REPORTS_DIR = os.path.join(os.path.dirname(__file__), "reports")
 os.makedirs(REPORTS_DIR, exist_ok=True)
@@ -846,6 +849,9 @@ def _create_postgres_tables():
             description TEXT, class_name VARCHAR(100), subject VARCHAR(100),
             due_date TEXT NOT NULL, total_marks INTEGER DEFAULT 100,
             created_by INTEGER,
+            recurrence VARCHAR(20) DEFAULT 'none',
+            recurrence_end TEXT,
+            parent_id INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
         """CREATE TABLE IF NOT EXISTS assignment_submissions (
@@ -1085,6 +1091,21 @@ def _bootstrap_postgres():
                 print(f"[OK] Postgres has {count} user(s) - skipping admin seed")
     except Exception as e:
         print(f"[WARN] Failed to seed admins: {e}")
+
+
+def _ensure_columns(cursor, table, columns):
+    """Add columns to a table if missing. columns = [(name, definition), ...]"""
+    try:
+        cursor.execute("PRAGMA table_info(" + table + ")")
+        existing = {r[1] for r in cursor.fetchall()}
+    except Exception:
+        return
+    for name, definition in columns:
+        if name not in existing:
+            cursor.execute(
+                "ALTER TABLE " + table + " ADD COLUMN " + name + " " + definition
+            )
+            print("[MIGRATE] Added " + table + "." + name)
 
 
 def init_database():
@@ -1374,6 +1395,9 @@ def init_database():
                 title TEXT NOT NULL, description TEXT, class_name TEXT,
                 subject TEXT, due_date TEXT NOT NULL, total_marks INTEGER DEFAULT 100,
                 created_by INTEGER,
+                recurrence TEXT DEFAULT 'none',
+                recurrence_end TEXT,
+                parent_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -1486,6 +1510,38 @@ def init_database():
             except sqlite3.OperationalError:
                 pass
 
+        # ---- Auto-migrations for older DBs ----
+        _ensure_columns(cursor, "assignments", [
+            ("recurrence",     "TEXT DEFAULT 'none'"),
+            ("recurrence_end", "TEXT"),
+            ("parent_id",      "INTEGER"),
+        ])
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                token TEXT NOT NULL,
+                ip TEXT,
+                user_agent TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                revoked INTEGER DEFAULT 0
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS security_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                username TEXT,
+                ip TEXT,
+                user_agent TEXT,
+                details TEXT,
+                severity TEXT DEFAULT 'info',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
         print("[OK] Database initialized (SQLite)")
 
@@ -3643,6 +3699,9 @@ def create_timetable_entry(data: TimetableCreate, force: bool = False,
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+        print("[ASSIGNMENT CREATE ERROR] " + str(e))
+        traceback.print_exc()
         raise HTTPException(500, "Failed: " + str(e))
 
 

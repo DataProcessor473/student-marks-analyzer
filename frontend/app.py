@@ -3223,10 +3223,26 @@ elif selected == t("assignments"):
                     if _s.get("submitted_at"):
                         st.caption("Submitted: " + str(_s.get("submitted_at")))
 
-                    if _s.get("feedback") and _status != "graded":
-                        st.caption("Student answer: " + str(_s.get("feedback")))
-                    elif _s.get("feedback"):
-                        st.caption("Answer: " + str(_s.get("feedback")))
+                    # Show text answer if present
+                    if _s.get("feedback"):
+                        st.markdown("**Student answer:** " + str(_s.get("feedback")))
+
+                    # Show uploaded file if present
+                    if _s.get("file_url"):
+                        _file_path = str(_s["file_url"])
+                        _full_url = API_URL.rstrip("/") + _file_path
+                        _filename = _file_path.split("/")[-1]
+                        st.markdown("**Uploaded file:** [" + _filename + "](" + _full_url + ")")
+
+                        # Inline preview for images
+                        _ext = _filename.lower().split(".")[-1]
+                        if _ext in ("jpg", "jpeg", "png"):
+                            try:
+                                st.image(_full_url, width=400)
+                            except Exception:
+                                pass
+                        elif _ext == "pdf":
+                            st.caption("PDF - open the link above to view")
 
                     # Grading form
                     if _s.get("submission_id"):
