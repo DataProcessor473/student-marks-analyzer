@@ -2199,6 +2199,19 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+def _ws_push_to_user(user_id: int, message: dict):
+    """Sync wrapper around manager.send_to_user (used by sync hooks)."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(manager.send_to_user(user_id, message))
+        else:
+            loop.run_until_complete(manager.send_to_user(user_id, message))
+    except Exception as e:
+        print("[WS hook] push failed: " + str(e))
+
+
+
 
 def log_live_event(user_id: int, event_type: str, payload: dict):
     try:
@@ -6300,6 +6313,8 @@ except Exception as _e:
     print(f"[WARN] Could not register fee reminder scheduler: {_e}")
 
 
+
+
 @app.on_event("startup")
 def startup_event():
     try:
@@ -7203,6 +7218,24 @@ async def submit_assignment(
 
         conn.commit()
 
+    # Phase 3A: notify assigning teacher
+    try:
+        _teacher_uid = None
+        with get_db_connection() as _wc:
+            _wcur = _wc.cursor()
+            _wcur.execute(_q("SELECT created_by FROM assignments WHERE id=?"), (assignment_id,))
+            _wr = _wcur.fetchone()
+            if _wr:
+                _teacher_uid = _wr["created_by"] if isinstance(_wr, dict) else _wr[0]
+        if _teacher_uid:
+            _ws_push_to_user(int(_teacher_uid), {
+                "type": "assignment.submitted",
+                "payload": {"assignment_id": assignment_id, "student_id": student_id},
+            })
+            print("[WS hook submit] notified user " + str(_teacher_uid))
+    except Exception as _we:
+        print("[WS hook submit] " + str(_we))
+
     return {
         "message": "Submission saved",
         "student_id": student_id,
@@ -7272,6 +7305,26 @@ def grade_submission(submission_id: int, data: GradeRequest,
             """), (data.marks_obtained, data.feedback, submission_id))
             conn.commit()
         log_live_event(user["id"], "assignment_graded", {"submission_id": submission_id})
+        # Phase 3A: notify the student whose submission was graded
+        try:
+            _stu_uid = None
+            with get_db_connection() as _wc:
+                _wcur = _wc.cursor()
+                _wcur.execute(_q("""SELECT s.user_id
+                    FROM students s
+                    JOIN assignment_submissions sub ON sub.student_id = s.id
+                    WHERE sub.id=?"""), (submission_id,))
+                _wr = _wcur.fetchone()
+                if _wr:
+                    _stu_uid = _wr["user_id"] if isinstance(_wr, dict) else _wr[0]
+            if _stu_uid:
+                _ws_push_to_user(int(_stu_uid), {
+                    "type": "grade.updated",
+                    "payload": {"submission_id": submission_id},
+                })
+                print("[WS hook grade] notified user " + str(_stu_uid))
+        except Exception as _we:
+            print("[WS hook grade] " + str(_we))
         return {"message": "Graded"}
     except HTTPException:
         raise
