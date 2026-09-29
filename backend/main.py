@@ -7135,22 +7135,23 @@ async def submit_assignment(
             if existing:
                 cursor.execute(_q("""
                     UPDATE assignment_submissions
-                    SET status='submitted', submitted_at=?, feedback=?
+                    SET status='submitted', submitted_at=?, feedback=COALESCE(?, feedback),
+                        file_url=COALESCE(?, file_url)
                     WHERE assignment_id=? AND student_id=?
-                """), (datetime.now().isoformat(), text_answer or None, assignment_id, student_id))
+                """), (datetime.now().isoformat(), text_answer or None, file_url, assignment_id, student_id))
             else:
                 cursor.execute(_q("""
                     INSERT INTO assignment_submissions
-                    (assignment_id, student_id, status, submitted_at, feedback)
-                    VALUES (?, ?, 'submitted', ?, ?)
-                """), (assignment_id, student_id, datetime.now().isoformat(), text_answer or None))
+                    (assignment_id, student_id, status, submitted_at, feedback, file_url)
+                    VALUES (?, ?, 'submitted', ?, ?, ?)
+                """), (assignment_id, student_id, datetime.now().isoformat(), text_answer or None, file_url))
 
             conn.commit()
 
         log_live_event(user["id"], "assignment_submitted", {
             "assignment_id": assignment_id, "student_id": student_id,
         })
-        return {"message": "Submitted successfully", "student_id": student_id}
+        return {"message": "Submitted successfully", "student_id": student_id, "file_url": file_url}
     except Exception as e:
         raise HTTPException(500, "Save error: " + str(e))
 
