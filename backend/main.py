@@ -7139,16 +7139,17 @@ async def submit_assignment(
     # --- 3. Save uploaded file (if any) ---
     stored_file_url = None
     if file is not None and getattr(file, "filename", None):
-        SUBMISSION_DIR.mkdir(parents=True, exist_ok=True)
+        os.makedirs(SUBMISSION_DIR, exist_ok=True)
         # Sanitize filename
         safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", file.filename)
         # Prefix with assignment + student + timestamp to avoid collisions
         import uuid
         stamp = uuid.uuid4().hex[:8]
         final_name = "a" + str(assignment_id) + "_s" + str(student_id) + "_" + stamp + "_" + safe_name
-        dest = SUBMISSION_DIR / final_name
+        dest = os.path.join(SUBMISSION_DIR, final_name)
         contents = await file.read()
-        dest.write_bytes(contents)
+        with open(dest, "wb") as _f:
+            _f.write(contents)
         # Public URL served by /uploads static mount
         stored_file_url = "/uploads/submissions/" + final_name
         print("[SUBMIT] Saved file " + str(dest) + " (" + str(len(contents)) + " bytes)")
