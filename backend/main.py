@@ -3821,7 +3821,23 @@ def list_submissions(assignment_id: int, user=Depends(require_role("admin", "tea
                 ON sub.student_id = s.id AND sub.assignment_id = ?
             WHERE s.class_name = (SELECT class_name FROM assignments WHERE id=?)
             ORDER BY s.name"""), (assignment_id, assignment_id))
-        return {"submissions": [dict(r) for r in cursor.fetchall()]}
+        rows = [dict(r) for r in cursor.fetchall()]
+        # Compute summary counts
+        total_students = len(rows)
+        submitted_count = sum(
+            1 for r in rows
+            if (r.get("status") or "").lower() in ("submitted", "graded")
+        )
+        graded_count = sum(
+            1 for r in rows
+            if (r.get("status") or "").lower() == "graded"
+        )
+        return {
+            "submissions": rows,
+            "total_students": total_students,
+            "submitted_count": submitted_count,
+            "graded_count": graded_count,
+        }
 
 
 @app.put("/assignments/submissions/{submission_id}")
